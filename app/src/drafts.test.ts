@@ -6,10 +6,12 @@ import {
   hasLLMProfileDraft,
   loadLLMProfileDraft,
   loadProjectDraft,
+  loadSourceRefreshHistory,
   loadSkillFilterDraft,
   loadSourceDraft,
   saveLLMProfileDraft,
   saveProjectDraft,
+  recordSourceRefresh,
   saveSkillFilterDraft,
   saveSourceDraft,
 } from "./drafts";
@@ -106,5 +108,22 @@ describe("navigation-safe form drafts", () => {
 
     clearLLMProfileDraft(storage, "/library");
     expect(hasLLMProfileDraft(loadLLMProfileDraft(storage, "/library"))).toBe(false);
+  });
+
+  it("keeps a bounded, summary-only source refresh history", () => {
+    const storage = new MemoryStorage();
+    for (let index = 0; index < 12; index += 1) {
+      recordSourceRefresh(storage, "/library", {
+        total: 23,
+        updated: index,
+        unchanged: 20,
+        local: 2,
+        failed: 1,
+      }, `2026-08-05T00:00:${String(index).padStart(2, "0")}Z`);
+    }
+    const history = loadSourceRefreshHistory(storage, "/library");
+    expect(history).toHaveLength(10);
+    expect(history[0].updated).toBe(11);
+    expect(storage.getItem("adaptive-skills:source-refresh-history-draft:/library")).not.toContain("error");
   });
 });

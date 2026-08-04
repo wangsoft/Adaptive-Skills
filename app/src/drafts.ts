@@ -35,6 +35,16 @@ export interface LLMProfileDraft {
   maxPerRun: number;
 }
 
+export interface SourceRefreshHistoryRecord {
+  id: string;
+  completedAt: string;
+  total: number;
+  updated: number;
+  unchanged: number;
+  local: number;
+  failed: number;
+}
+
 export const EMPTY_PROJECT_DRAFT: ProjectDraft = {
   project: "",
   requirement: "",
@@ -68,7 +78,7 @@ export const EMPTY_LLM_PROFILE_DRAFT: LLMProfileDraft = {
   maxPerRun: 20,
 };
 
-function key(kind: "project" | "source" | "skills" | "llm", library: string): string {
+function key(kind: "project" | "source" | "skills" | "llm" | "source-refresh-history", library: string): string {
   return `adaptive-skills:${kind}-draft:${library}`;
 }
 
@@ -241,4 +251,46 @@ export function hasLLMProfileDraft(draft: LLMProfileDraft): boolean {
     draft.timeout !== EMPTY_LLM_PROFILE_DRAFT.timeout ||
     draft.maxPerRun !== EMPTY_LLM_PROFILE_DRAFT.maxPerRun
   );
+}
+
+export function loadSourceRefreshHistory(
+  storage: Storage,
+  library: string,
+): SourceRefreshHistoryRecord[] {
+  const value = read(storage, key("source-refresh-history", library));
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Partial<SourceRefreshHistoryRecord>;
+    const counts = [record.total, record.updated, record.unchanged, record.local, record.failed];
+    if (
+      typeof record.id !== "string" || typeof record.completedAt !== "string" ||
+      counts.some((count) => !Number.isInteger(count) || Number(count) < 0)
+    ) return [];
+    return [{
+      id: record.id,
+      completedAt: record.completedAt,
+      total: Number(record.total),
+      updated: Number(record.updated),
+      unchanged: Number(record.unchanged),
+      local: Number(record.local),
+      failed: Number(record.failed),
+    }];
+  }).slice(0, 10);
+}
+
+export function recordSourceRefresh(
+  storage: Storage,
+  library: string,
+  result: Pick<SourceRefreshHistoryRecord, "total" | "updated" | "unchanged" | "local" | "failed">,
+  completedAt = new Date().toISOString(),
+): SourceRefreshHistoryRecord[] {
+  const record: SourceRefreshHistoryRecord = {
+    id: `${completedAt}-${Math.random().toString(36).slice(2, 10)}`,
+    completedAt,
+    ...result,
+  };
+  const history = [record, ...loadSourceRefreshHistory(storage, library)].slice(0, 10);
+  write(storage, key("source-refresh-history", library), history);
+  return history;
 }

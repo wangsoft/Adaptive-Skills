@@ -50,8 +50,10 @@ import {
   hasLLMProfileDraft,
   loadLLMProfileDraft,
   loadProjectDraft,
+  loadSourceRefreshHistory,
   loadSkillFilterDraft,
   loadSourceDraft,
+  recordSourceRefresh,
   saveLLMProfileDraft,
   saveProjectDraft,
   saveSkillFilterDraft,
@@ -541,6 +543,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   const [url, setUrl] = useState(initialDraft.url);
   const [name, setName] = useState(initialDraft.name);
   const [refreshResult, setRefreshResult] = useState<SourceRefreshAllResult | null>(null);
+  const [refreshHistory, setRefreshHistory] = useState(() => loadSourceRefreshHistory(localStorage, library));
   useEffect(() => {
     saveSourceDraft(localStorage, library, { adding, url, name });
   }, [library, adding, url, name]);
@@ -558,7 +561,10 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   const refreshAll = async () => {
     setRefreshResult(null);
     const result = await onRefreshAll();
-    if (result) setRefreshResult(result);
+    if (result) {
+      setRefreshResult(result);
+      setRefreshHistory(recordSourceRefresh(localStorage, library, result));
+    }
   };
   const refreshFailures = refreshResult?.results.filter((item) => item.status === "failed") ?? [];
   const evaluateSource = (source: SourceSummary) => {
@@ -595,6 +601,13 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
             </div>
           )}
         </div>
+      )}
+      {refreshHistory.length > 0 && (
+        <section className="panel source-refresh-history">
+          <div className="panel-heading"><div><span className="eyebrow">Local activity</span><h3>最近全部更新记录</h3></div><span className="badge neutral">保留 {refreshHistory.length} 次</span></div>
+          <div className="source-refresh-history-list">{refreshHistory.map((record) => <div className="source-refresh-history-row" key={record.id}><History size={14} /><time>{formatDate(record.completedAt)}</time><span>{record.updated} 更新</span><span>{record.unchanged} 无变化</span><span>{record.local} 本地保留</span><span className={record.failed ? "failed" : "success"}>{record.failed} 失败</span></div>)}</div>
+          <p>这里只保存计数摘要，不保存仓库错误文本或凭据；完整状态仍以本地目录和 SQLite 目录为准。</p>
+        </section>
       )}
       {adding && (
         <form className="panel add-source" onSubmit={(event) => void submit(event)}>
