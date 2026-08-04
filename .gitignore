@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+dist/
+build/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+node_modules/
+app/src-tauri/target/
+app/src-tauri/gen/
+app/.playwright-cli/
+app/src-tauri/icons/android/
+app/src-tauri/icons/ios/
+app/src-tauri/icons/Square*.png
+app/src-tauri/icons/StoreLogo.png
+app/src-tauri/icons/icon.ico
+
+# Adaptive Workloop evidence is local execution state.
+.workloop/local/
+.gstack/

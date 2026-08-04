@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "adaptive-skills"
+version = "0.1.0"
+description = "Local-first catalog and project linker for Agent Skills"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Adaptive Skills contributors" }]
+dependencies = ["keyring>=25,<26"]
+
+[project.optional-dependencies]
+excel = ["openpyxl>=3.1,<4"]
+dev = ["openpyxl>=3.1,<4"]
+
+[project.scripts]
+adaptive-skills = "adaptive_skills.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/adaptive_skills"]

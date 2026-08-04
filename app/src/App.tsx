@@ -1,0 +1,950 @@
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Check,
+  ChevronRight,
+  CircleGauge,
+  Database,
+  ExternalLink,
+  FolderGit2,
+  FolderOpen,
+  GitBranch,
+  History,
+  Layers3,
+  Link2,
+  LoaderCircle,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Unlink,
+  X,
+} from "lucide-react";
+import { api } from "./api";
+import {
+  canSelectSkill,
+  formatDate,
+  isElevatedRisk,
+  riskLabel,
+  selectedRiskCount,
+  shortSha,
+} from "./domain";
+import {
+  clearProjectDraft,
+  clearSourceDraft,
+  EMPTY_PROJECT_DRAFT,
+  loadProjectDraft,
+  loadSourceDraft,
+  saveProjectDraft,
+  saveSourceDraft,
+} from "./drafts";
+import type { ProjectDraft } from "./drafts";
+import type {
+  AppSnapshot,
+  ProjectPlan,
+  ProjectHistoryEvent,
+  ProjectStatus,
+  RiskLevel,
+  SkillDetail,
+  SkillSummary,
+  SourceRefreshAllResult,
+  SourceSummary,
+  SourceUpdatePolicy,
+  LLMProfile,
+  LLMProfileProvider,
+  LLMAPIMode,
+  ProjectSummary,
+} from "./types";
+
+type View = "overview" | "skills" | "sources" | "projects" | "evaluation";
+
+const DEFAULT_LIBRARY = "~/skills";
+
+const NAV_ITEMS: Array<{
+  id: View;
+  label: string;
+  description: string;
+  icon: typeof CircleGauge;
+}> = [
+  { id: "overview", label: "概览", description: "目录健康与风险", icon: CircleGauge },
+  { id: "skills", label: "Skills", description: "筛选与审查", icon: Layers3 },
+  { id: "sources", label: "来源", description: "Git 仓库生命周期", icon: FolderGit2 },
+  { id: "evaluation", label: "LLM 评测", description: "分类、评分与审核", icon: Sparkles },
+  { id: "projects", label: "项目", description: "按需挂载 Skills", icon: Link2 },
+];
+
+function App() {
+  const [library, setLibrary] = useState(
+    () => localStorage.getItem("adaptive-skills-library") || DEFAULT_LIBRARY,
+  );
+  const [view, setView] = useState<View>("overview");
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SkillDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const loadSnapshot = useCallback(
+    async (query?: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const value = await api.snapshot(library, query);
+        setSnapshot(value);
+        if (value.library.path !== library) setLibrary(value.library.path);
+        localStorage.setItem("adaptive-skills-library", value.library.path);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [library],
+  );
+
+  useEffect(() => {
+    void loadSnapshot();
+  }, [loadSnapshot]);
+
+  const chooseLibrary = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "选择 Skills 目录" });
+    if (typeof selected === "string") setLibrary(selected);
+  };
+
+  const showSkill = async (skill: SkillSummary) => {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      setDetail(await api.skill(library, skill.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const runAction = async (label: string, action: () => Promise<unknown>): Promise<boolean> => {
+    setBusy(label);
+    setError(null);
+    try {
+      await action();
+      await loadSnapshot();
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const refreshAllSources = async (): Promise<SourceRefreshAllResult | null> => {
+    setBusy("refresh-all");
+    setError(null);
+    try {
+      const result = await api.refreshAllSources(library);
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const addAndScanSource = (url: string, name?: string): Promise<boolean> =>
+    runAction("source-add", async () => {
+      const added = await api.addSource(library, url, name);
+      const sourceId = added.id;
+      if (typeof sourceId !== "string" || !sourceId) {
+        throw new Error("新来源没有返回可扫描的稳定 ID");
+      }
+      await api.scan(library, sourceId);
+    });
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark"><Sparkles size={18} /></div>
+          <div><strong>Adaptive Skills</strong><span>Local skill intelligence</span></div>
+        </div>
+
+        <nav className="nav-list" aria-label="主导航">
+          {NAV_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                className={`nav-item ${view === item.id ? "active" : ""}`}
+                key={item.id}
+                onClick={() => setView(item.id)}
+              >
+                <Icon size={19} />
+                <span><strong>{item.label}</strong><small>{item.description}</small></span>
+                <ChevronRight size={15} className="nav-chevron" />
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="library-card">
+          <div className="eyebrow"><Database size={13} /> 当前目录</div>
+          <p title={library}>{library}</p>
+          <button className="text-button" onClick={chooseLibrary}>
+            <FolderOpen size={14} /> 更换目录
+          </button>
+        </div>
+
+        <div className="sidebar-footer">
+          <span className={`status-dot ${error ? "error" : loading ? "loading" : "ready"}`} />
+          {error ? "连接异常" : loading ? "正在读取目录" : `契约 v${snapshot?.contract_version ?? "—"}`}
+        </div>
+      </aside>
+
+      <main className="main-content">
+        <header className="topbar">
+          <div>
+            <span className="page-kicker">{NAV_ITEMS.find((item) => item.id === view)?.description}</span>
+            <h1>{NAV_ITEMS.find((item) => item.id === view)?.label}</h1>
+          </div>
+          <button
+            className="icon-button"
+            title="刷新目录"
+            disabled={loading || Boolean(busy)}
+            onClick={() => void loadSnapshot()}
+          >
+            <RefreshCw size={18} className={loading ? "spin" : ""} />
+          </button>
+        </header>
+
+        {error && (
+          <div className="error-banner" role="alert">
+            <AlertTriangle size={18} />
+            <div><strong>操作没有完成</strong><p>{error}</p></div>
+            <button onClick={() => setError(null)} aria-label="关闭错误"><X size={16} /></button>
+          </div>
+        )}
+
+        {loading && !snapshot ? (
+          <LoadingState />
+        ) : snapshot ? (
+          <div className="view-container">
+            {view === "overview" && <Overview snapshot={snapshot} onNavigate={setView} />}
+            {view === "skills" && (
+              <SkillsView
+                snapshot={snapshot}
+                onSearch={loadSnapshot}
+                onReset={() => loadSnapshot()}
+                onOpen={showSkill}
+                detailLoading={detailLoading}
+              />
+            )}
+            {view === "sources" && (
+              <SourcesView
+                key={library}
+                library={library}
+                sources={snapshot.sources}
+                busy={busy}
+                onAdd={addAndScanSource}
+                onScan={(id) => runAction(`scan-${id}`, () => api.scan(library, id))}
+                onRefreshAll={refreshAllSources}
+                onSetPolicy={(id, policy) =>
+                  runAction(`policy-${id}`, () => api.setSourcePolicy(library, id, policy))
+                }
+                onUpdate={(id) =>
+                  runAction(`update-${id}`, async () => {
+                    await api.updateSource(library, id);
+                    await api.scan(library, id);
+                  })
+                }
+                llmEnabled={snapshot.llm.config.provider !== "disabled"}
+                onEvaluate={(id) =>
+                  runAction(`evaluate-${id}`, () => api.evaluateSource(library, id))
+                }
+              />
+            )}
+            {view === "evaluation" && (
+              <EvaluationView
+                key={`${library}-${snapshot.llm.config.active_profile_id || "disabled"}-${snapshot.llm.config.profiles.length}`}
+                snapshot={snapshot}
+                busy={busy}
+                onSaveProfile={(profile, secret) =>
+                  runAction("llm-profile-save", () =>
+                    api.saveLLMProfile(library, profile, secret),
+                  )
+                }
+                onActivate={(id) => runAction("llm-profile-activate", () => api.activateLLMProfile(library, id))}
+                onDisable={() => runAction("llm-profile-disable", () => api.configureLLM(library, "disabled", "", 300, 20))}
+                onDelete={(id) => runAction("llm-profile-delete", () => api.deleteLLMProfile(library, id))}
+                onTest={(id) => runAction("llm-profile-test", () => api.testLLMProfile(library, id))}
+                onEvaluate={(id) =>
+                  runAction(`evaluate-${id}`, () => api.evaluateSource(library, id))
+                }
+                onApply={(id, replaceExisting) =>
+                  runAction(`evaluation-apply-${id}`, () =>
+                    api.applyEvaluation(library, id, replaceExisting),
+                  )
+                }
+                onReject={(id) =>
+                  runAction(`evaluation-reject-${id}`, () =>
+                    api.rejectEvaluation(library, id),
+                  )
+                }
+              />
+            )}
+            {view === "projects" && <ProjectsView key={library} library={library} onError={setError} />}
+          </div>
+        ) : (
+          <EmptyConnection library={library} onChoose={chooseLibrary} onRetry={() => loadSnapshot()} />
+        )}
+      </main>
+
+      {detail && <SkillDrawer skill={detail} onClose={() => setDetail(null)} />}
+      {busy && <ActivityToast label={busy} />}
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="center-state">
+      <LoaderCircle className="spin" size={28} />
+      <strong>正在连接本地目录</strong>
+      <span>读取 SQLite 目录，不会执行第三方 Skill。</span>
+    </div>
+  );
+}
+
+function EmptyConnection({ library, onChoose, onRetry }: { library: string; onChoose: () => void; onRetry: () => void }) {
+  return (
+    <div className="center-state empty">
+      <Database size={32} />
+      <strong>尚未连接 Skills 目录</strong>
+      <span>{library}</span>
+      <div className="button-row">
+        <button className="button secondary" onClick={onChoose}><FolderOpen size={16} />选择目录</button>
+        <button className="button primary" onClick={onRetry}><RefreshCw size={16} />重新连接</button>
+      </div>
+    </div>
+  );
+}
+
+function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate: (view: View) => void }) {
+  const { summary } = snapshot;
+  const safePercent = summary.skill_count ? Math.round((summary.valid_count / summary.skill_count) * 100) : 0;
+  const elevated = summary.risk_counts.high + summary.risk_counts.critical;
+  const cards = [
+    { label: "收录 Skills", value: summary.skill_count, note: `${summary.annotated_count} 条人工标注`, icon: Layers3, tone: "mint" },
+    { label: "Git 来源", value: summary.source_count, note: `最后扫描 ${formatDate(summary.last_scanned_at)}`, icon: FolderGit2, tone: "blue" },
+    { label: "有效率", value: `${safePercent}%`, note: `${summary.invalid_count} 个需要修复`, icon: ShieldCheck, tone: "green" },
+    { label: "高风险信号", value: elevated, note: `${summary.risk_counts.critical} 个严重风险`, icon: ShieldAlert, tone: "amber" },
+  ];
+  return (
+    <div className="stack gap-xl">
+      <section className="hero-panel">
+        <div>
+          <div className="eyebrow"><Sparkles size={14} /> 本地优先 · 按项目加载</div>
+          <h2>让每个项目只看到真正需要的 Skills。</h2>
+          <p>目录、风险和人工分类保留在本地。先解释推荐，再由你确认创建项目软链接。</p>
+          <button className="button primary" onClick={() => onNavigate("projects")}>初始化项目 Skills <ArrowRight size={16} /></button>
+        </div>
+        <div className="hero-orbit" aria-hidden="true">
+          <div className="orbit-ring ring-one" />
+          <div className="orbit-ring ring-two" />
+          <div className="orbit-core"><Layers3 size={25} /></div>
+          <span className="orbit-node node-one" />
+          <span className="orbit-node node-two" />
+          <span className="orbit-node node-three" />
+        </div>
+      </section>
+
+      <section className="metric-grid">
+        {cards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <article className="metric-card" key={card.label}>
+              <div className={`metric-icon ${card.tone}`}><Icon size={18} /></div>
+              <span>{card.label}</span><strong>{card.value}</strong><small>{card.note}</small>
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel risk-panel">
+          <div className="panel-heading"><div><span className="eyebrow">Risk posture</span><h3>风险分布</h3></div><button className="text-button" onClick={() => onNavigate("skills")}>查看 Skills <ArrowRight size={14} /></button></div>
+          <div className="risk-bars">
+            {(["none", "low", "medium", "high", "critical"] as RiskLevel[]).map((risk) => {
+              const count = summary.risk_counts[risk];
+              const width = summary.skill_count ? Math.max((count / summary.skill_count) * 100, count ? 2 : 0) : 0;
+              return (
+                <div className="risk-row" key={risk}>
+                  <span>{riskLabel(risk)}</span><div className="bar-track"><i className={`bar risk-${risk}`} style={{ width: `${width}%` }} /></div><strong>{count}</strong>
+                </div>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="panel sources-preview">
+          <div className="panel-heading"><div><span className="eyebrow">Recent sources</span><h3>来源状态</h3></div><button className="text-button" onClick={() => onNavigate("sources")}>管理来源 <ArrowRight size={14} /></button></div>
+          <div className="compact-list">
+            {snapshot.sources.slice(0, 5).map((source) => (
+              <div className="compact-row" key={source.id}>
+                <div className="source-avatar">{source.name.slice(0, 2).toUpperCase()}</div>
+                <div><strong>{source.name}</strong><span>{source.skill_count} skills · {shortSha(source.head_sha)}</span></div>
+                <span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? `${source.invalid_count} 异常` : "健康"}</span>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+    </div>
+  );
+}
+
+function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
+  snapshot: AppSnapshot;
+  onSearch: (query?: string) => Promise<void>;
+  onReset: () => Promise<void>;
+  onOpen: (skill: SkillSummary) => void;
+  detailLoading: boolean;
+}) {
+  const [query, setQuery] = useState(snapshot.query || "");
+  const [risk, setRisk] = useState<string>("all");
+  const [source, setSource] = useState("all");
+  const [category, setCategory] = useState("all");
+  const filtered = useMemo(
+    () => snapshot.skills.filter((skill) =>
+      (risk === "all" || skill.audit_severity === risk) &&
+      (source === "all" || skill.source_name === source) &&
+      (category === "all" || skill.category_l1 === category),
+    ),
+    [snapshot.skills, risk, source, category],
+  );
+  const categories = Array.from(new Set(snapshot.filters.categories.map((item) => item.category_l1).filter(Boolean))) as string[];
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void (query.trim() ? onSearch(query.trim()) : onReset());
+  };
+
+  return (
+    <div className="stack gap-lg">
+      <section className="panel filter-panel">
+        <form className="search-field" onSubmit={submit}>
+          <Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="描述项目需求，或搜索 Skill 名称…" />
+          {snapshot.query && <button type="button" className="clear-search" onClick={() => { setQuery(""); void onReset(); }}><X size={15} /></button>}
+          <button className="button primary compact" type="submit">需求检索</button>
+        </form>
+        <div className="filter-row">
+          <FilterSelect label="风险" value={risk} onChange={setRisk} options={[{ value: "all", label: "全部风险" }, ...snapshot.filters.risks.map((value) => ({ value, label: riskLabel(value) }))]} />
+          <FilterSelect label="来源" value={source} onChange={setSource} options={[{ value: "all", label: "全部来源" }, ...snapshot.sources.map((item) => ({ value: item.name, label: item.name }))]} />
+          <FilterSelect label="分类" value={category} onChange={setCategory} options={[{ value: "all", label: "全部分类" }, ...categories.map((value) => ({ value, label: value }))]} />
+          <span className="result-count">显示 {filtered.length} / {snapshot.summary.skill_count}</span>
+        </div>
+      </section>
+
+      {snapshot.query && (
+        <div className="query-note"><Sparkles size={16} /><span>正在展示“{snapshot.query}”的解释型匹配结果；高风险 Skill 默认已排除。</span></div>
+      )}
+
+      <section className="skill-grid">
+        {filtered.map((skill) => (
+          <button className="skill-card" key={skill.id} onClick={() => onOpen(skill)} disabled={detailLoading}>
+            <div className="skill-card-top">
+              <div className="skill-icon"><BookOpen size={18} /></div>
+              <div className="skill-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span>{!skill.valid && <span className="badge warning">无效</span>}</div>
+            </div>
+            <div><h3>{skill.name}</h3><p>{skill.description || "暂无描述"}</p></div>
+            {skill.reason?.length ? <div className="reason-line"><Sparkles size={13} />匹配 {skill.reason.slice(0, 2).map((item) => item.field).join("、")}</div> : null}
+            <div className="skill-meta"><span>{skill.category_l1 || "未分类"}{skill.category_l2 ? ` / ${skill.category_l2}` : ""}</span><span>{skill.source_name}</span></div>
+          </button>
+        ))}
+      </section>
+      {!filtered.length && <div className="empty-inline"><Search size={24} /><strong>没有匹配的 Skill</strong><span>尝试调整风险、来源或分类筛选。</span></div>}
+    </div>
+  );
+}
+
+function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+  return <label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
+}
+
+function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefreshAll, onSetPolicy, llmEnabled, onEvaluate }: {
+  library: string;
+  sources: SourceSummary[];
+  busy: string | null;
+  onAdd: (url: string, name?: string) => Promise<boolean>;
+  onScan: (id: string) => Promise<boolean>;
+  onUpdate: (id: string) => Promise<boolean>;
+  onRefreshAll: () => Promise<SourceRefreshAllResult | null>;
+  onSetPolicy: (id: string, policy: SourceUpdatePolicy) => Promise<boolean>;
+  llmEnabled: boolean;
+  onEvaluate: (id: string) => Promise<boolean>;
+}) {
+  const initialDraft = useMemo(() => loadSourceDraft(localStorage, library), [library]);
+  const [adding, setAdding] = useState(initialDraft.adding);
+  const [url, setUrl] = useState(initialDraft.url);
+  const [name, setName] = useState(initialDraft.name);
+  const [refreshResult, setRefreshResult] = useState<SourceRefreshAllResult | null>(null);
+  useEffect(() => {
+    saveSourceDraft(localStorage, library, { adding, url, name });
+  }, [library, adding, url, name]);
+  const clearAddDraft = () => {
+    setAdding(false); setUrl(""); setName("");
+    clearSourceDraft(localStorage, library);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!url.trim()) return;
+    const completed = await onAdd(url.trim(), name.trim() || undefined);
+    if (!completed) return;
+    clearAddDraft();
+  };
+  const refreshAll = async () => {
+    setRefreshResult(null);
+    const result = await onRefreshAll();
+    if (result) setRefreshResult(result);
+  };
+  const refreshFailures = refreshResult?.results.filter((item) => item.status === "failed") ?? [];
+  const evaluateSource = (source: SourceSummary) => {
+    if (!source.pending_evaluation_count || !llmEnabled) return;
+    const confirmed = window.confirm(
+      `将使用已配置的大模型评测 ${source.name}。当前有 ${source.pending_evaluation_count} 个待处理 Skill，本次按配置上限执行，可能消耗模型额度。是否继续？`,
+    );
+    if (confirmed) void onEvaluate(source.id);
+  };
+  return (
+    <div className="stack gap-lg">
+      <div className="section-toolbar">
+        <div><h2>{sources.length} 个 Git 来源</h2><p>远程跟随只接受 fast-forward；本地维护会保留工作区并仅扫描。</p></div>
+        <div className="button-row">
+          <button className="button secondary" disabled={Boolean(busy) || !sources.length} onClick={() => void refreshAll()}>
+            {busy === "refresh-all" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
+            {busy === "refresh-all" ? "正在更新全部来源…" : "全部更新"}
+          </button>
+          <button className="button primary" disabled={Boolean(busy)} onClick={() => setAdding((value) => !value)}><Plus size={16} />添加 Git 来源</button>
+        </div>
+      </div>
+      {refreshResult && (
+        <div className={`refresh-summary ${refreshResult.failed ? "with-failures" : ""}`} role="status">
+          <div className="refresh-summary-heading">
+            {refreshResult.failed ? <AlertTriangle size={18} /> : <Check size={18} />}
+            <div>
+              <strong>全部来源更新完成</strong>
+              <p>已检查 {refreshResult.total} 个来源 · {refreshResult.updated} 个已更新 · {refreshResult.unchanged} 个无变化 · {refreshResult.local} 个本地保留 · {refreshResult.failed} 个失败</p>
+            </div>
+          </div>
+          {refreshFailures.length > 0 && (
+            <div className="refresh-failures">
+              {refreshFailures.map((item) => <p key={item.source_id}><strong>{item.source}</strong><span>{item.error || "更新失败"}{item.type === "ConflictError" ? "；可保留改动并设为本地维护" : ""}</span></p>)}
+            </div>
+          )}
+        </div>
+      )}
+      {adding && (
+        <form className="panel add-source" onSubmit={(event) => void submit(event)}>
+          <div><span className="eyebrow">Clone, scan and queue</span><h3>添加远程 Skill 仓库</h3></div>
+          <label><span>Git 地址</span><input required value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/skills.git" /></label>
+          <label><span>显示名称（可选）</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="自动从地址推导" /></label>
+          <div className="button-row"><button type="button" className="button ghost" onClick={clearAddDraft}>取消并清空</button><button className="button primary" disabled={busy === "source-add"}>{busy === "source-add" ? <LoaderCircle className="spin" size={16} /> : <GitBranch size={16} />}Clone、扫描并入队</button></div>
+        </form>
+      )}
+      <section className="source-grid">
+        {sources.map((source) => (
+          <article className="source-card" key={source.id}>
+            <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地 Git 仓库"}</p></div><div className="source-badges"><span className="badge neutral">{source.update_policy === "local" ? "本地维护" : "远程跟随"}</span><span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? "需检查" : "健康"}</span></div></div>
+            <div className="source-stat-row"><div><span>Skills</span><strong>{source.skill_count}</strong></div><div><span>有效</span><strong>{source.valid_count}</strong></div><div><span>待评测</span><strong>{source.pending_evaluation_count}</strong></div></div>
+            <div className="source-path" title={source.local_path}><FolderGit2 size={14} />{source.local_path}</div>
+            <div className="source-footer"><span><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</span><span>{formatDate(source.last_scanned_at)}</span></div>
+            <div className="source-actions">
+              <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>
+              <button className="button secondary compact" disabled={Boolean(busy)} onClick={() => void onScan(source.id)}>{busy === `scan-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新扫描</button>
+              {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? `评测 ${source.pending_evaluation_count}` : "配置 LLM"}</button>}
+              {source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
+            </div>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+interface LLMProfileFormValue {
+  id: string;
+  name: string;
+  provider: LLMProfileProvider;
+  model: string;
+  baseUrl: string;
+  apiMode: LLMAPIMode;
+  timeout: number;
+  maxPerRun: number;
+  activate: boolean;
+}
+
+function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, onDelete, onTest, onEvaluate, onApply, onReject }: {
+  snapshot: AppSnapshot;
+  busy: string | null;
+  onSaveProfile: (profile: LLMProfileFormValue, secret?: string) => Promise<boolean>;
+  onActivate: (profileId: string) => Promise<boolean>;
+  onDisable: () => Promise<boolean>;
+  onDelete: (profileId: string) => Promise<boolean>;
+  onTest: (profileId: string) => Promise<boolean>;
+  onEvaluate: (sourceId: string) => Promise<boolean>;
+  onApply: (evaluationId: string, replaceExisting: boolean) => Promise<boolean>;
+  onReject: (evaluationId: string) => Promise<boolean>;
+}) {
+  const current = snapshot.llm.config;
+  const [showForm, setShowForm] = useState(current.profiles.length === 0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [profileId, setProfileId] = useState("");
+  const [name, setName] = useState("");
+  const [provider, setProvider] = useState<LLMProfileProvider>("openai-compatible");
+  const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
+  const [apiMode, setApiMode] = useState<LLMAPIMode>("auto");
+  const [apiKey, setApiKey] = useState("");
+  const [timeout, setTimeoutValue] = useState(300);
+  const [maxPerRun, setMaxPerRun] = useState(20);
+  const pendingSources = snapshot.sources.filter((source) => source.pending_evaluation_count > 0);
+  const active = snapshot.llm.active_profile;
+
+  const resetForm = () => {
+    setEditingId(null);
+    setProfileId(""); setName(""); setProvider("openai-compatible"); setModel("");
+    setBaseUrl("https://api.openai.com/v1"); setApiMode("auto"); setApiKey("");
+    setTimeoutValue(300); setMaxPerRun(20);
+  };
+  const editProfile = (profile: LLMProfile) => {
+    setEditingId(profile.id);
+    setProfileId(profile.id); setName(profile.name); setProvider(profile.provider);
+    setModel(profile.model || ""); setBaseUrl(profile.base_url || "https://api.openai.com/v1");
+    setApiMode(profile.api_mode || "auto"); setApiKey("");
+    setTimeoutValue(profile.timeout_seconds); setMaxPerRun(profile.max_per_run); setShowForm(true);
+  };
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    const completed = await onSaveProfile({
+      id: profileId, name, provider, model, baseUrl, apiMode, timeout, maxPerRun, activate: true,
+    }, apiKey.trim() || undefined);
+    if (completed) { setApiKey(""); setShowForm(false); }
+  };
+  const evaluate = (source: SourceSummary) => {
+    const confirmed = window.confirm(
+      `将调用 ${active?.name || "当前模型"} 评测 ${source.name}。单次最多处理 ${current.max_per_run} 个 Skill，可能消耗模型额度。是否继续？`,
+    );
+    if (confirmed) void onEvaluate(source.id);
+  };
+  const apply = (evaluationId: string, replaceExisting: boolean) => {
+    if (replaceExisting && !window.confirm("此操作会替换现有人工或 Arena 整理结果。确认继续？")) return;
+    void onApply(evaluationId, replaceExisting);
+  };
+
+  return (
+    <div className="stack gap-lg evaluation-page">
+      <section className="panel evaluator-settings">
+        <div className="panel-heading"><div><span className="eyebrow">Provider profiles</span><h3>模型连接</h3></div><div className="button-row"><button className="button ghost compact" disabled={!active || Boolean(busy)} onClick={() => void onDisable()}>暂停评测</button><button className="button primary compact" disabled={Boolean(busy)} onClick={() => { resetForm(); setShowForm(true); }}><Plus size={15} />添加连接</button></div></div>
+        <p className="muted">支持 Codex CLI、Claude Code 和 OpenAI-compatible API。API Key 只写入系统凭据库，不进入目录配置、命令参数或评测记录。</p>
+        <div className="llm-profile-list">
+          {current.profiles.map((profile) => {
+            const selected = current.active_profile_id === profile.id;
+            const available = snapshot.llm.availability[profile.provider];
+            return <article className={`llm-profile-card ${selected ? "active" : ""}`} key={profile.id}>
+              <div><span className="eyebrow">{profile.provider}</span><h4>{profile.name}</h4><p>{profile.model || "默认模型"}{profile.base_url ? ` · ${profile.base_url}` : ""}</p></div>
+              <div className="llm-profile-state"><span className={selected ? "badge success" : "badge neutral"}>{selected ? "当前使用" : available ? "可用" : "未检测到"}</span>{profile.provider === "openai-compatible" && <small>{profile.credential_configured ? "已配置凭据" : "无凭据 / 本地服务"}</small>}</div>
+              <div className="profile-actions"><button className="text-button" disabled={Boolean(busy)} onClick={() => editProfile(profile)}>编辑</button>{profile.provider === "openai-compatible" && <button className="text-button" disabled={Boolean(busy)} onClick={() => { if (!window.confirm("连接测试会访问该服务的 /models 接口，是否继续？")) return; void onTest(profile.id).then((ok) => { if (ok) window.alert("连接测试通过"); }); }}>测试</button>}{!selected && <button className="text-button" disabled={Boolean(busy)} onClick={() => void onActivate(profile.id)}>启用</button>}<button className="text-button danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`删除模型连接“${profile.name}”？项目评测记录会保留。`)) void onDelete(profile.id); }}><Trash2 size={13} />删除</button></div>
+            </article>;
+          })}
+          {!current.profiles.length && <div className="history-empty"><Settings2 size={20} /><span>还没有模型连接。添加一个连接后才能对新 Skill 生成分类和评分提案。</span></div>}
+        </div>
+        {showForm && <form className="evaluation-profile-form" onSubmit={(event) => void save(event)}>
+          <div className="profile-form-heading"><strong>{editingId ? "编辑连接" : "新建连接"}</strong><button type="button" className="icon-button" onClick={() => setShowForm(false)}><X size={15} /></button></div>
+          <label className="input-field"><span>连接 ID</span><input required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" value={profileId} disabled={Boolean(editingId)} onChange={(event) => setProfileId(event.target.value)} placeholder="office-model" /></label>
+          <label className="input-field"><span>显示名称</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="公司模型" /></label>
+          <label className="input-field"><span>连接方式</span><select value={provider} disabled={Boolean(editingId)} onChange={(event) => setProvider(event.target.value as LLMProfileProvider)}><option value="openai-compatible">OpenAI-compatible API</option><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></label>
+          <label className="input-field"><span>模型{provider === "openai-compatible" ? "" : "（可选）"}</span><input required={provider === "openai-compatible"} value={model} onChange={(event) => setModel(event.target.value)} placeholder={provider === "openai-compatible" ? "gpt-5.2 / company-model" : "留空使用 CLI 默认模型"} /></label>
+          {provider === "openai-compatible" && <><label className="input-field wide-field"><span>Base URL</span><input required type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" /></label><label className="input-field"><span>API 模式</span><select value={apiMode} onChange={(event) => setApiMode(event.target.value as LLMAPIMode)}><option value="auto">自动（OpenAI 用 Responses）</option><option value="responses">Responses API</option><option value="chat-completions">Chat Completions</option></select></label><label className="input-field"><span>API Key（留空则保留）</span><input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="仅写入系统凭据库" /></label></>}
+          <label className="input-field"><span>超时秒数</span><input type="number" min={30} max={1800} value={timeout} onChange={(event) => setTimeoutValue(Number(event.target.value))} /></label>
+          <label className="input-field"><span>单次最多 Skills</span><input type="number" min={1} max={100} value={maxPerRun} onChange={(event) => setMaxPerRun(Number(event.target.value))} /></label>
+          <button className="button primary" disabled={Boolean(busy)}>{busy === "llm-profile-save" ? <LoaderCircle className="spin" size={16} /> : <Settings2 size={16} />}保存并启用</button>
+        </form>}
+      </section>
+
+      <section className="evaluation-kpis">
+        <div className="panel evaluation-kpi"><span>固定一级分类</span><strong>{snapshot.llm.taxonomy.level_one.length}</strong><small>{snapshot.llm.taxonomy.version}</small></div>
+        <div className="panel evaluation-kpi"><span>待模型评测</span><strong>{snapshot.llm.pending_count}</strong><small>新 Skill 或内容已变化</small></div>
+        <div className="panel evaluation-kpi"><span>待人工审核</span><strong>{snapshot.llm.proposal_count}</strong><small>不会自动覆盖正式整理</small></div>
+      </section>
+
+      <section className="panel taxonomy-policy">
+        <div className="panel-heading"><div><span className="eyebrow">Taxonomy governance</span><h3>固定主干，可控扩展</h3></div></div>
+        <p>一级分类采用版本化的 15 类公共主干；二级分类优先复用当前库中重复出现的词表，模型只有在确实无法归类时才能提出“新分类候选”；个性差异放在自由标签中。</p>
+        <div className="taxonomy-chips">{snapshot.llm.taxonomy.level_one.map((category) => <span key={category}>{category}</span>)}</div>
+      </section>
+
+      {pendingSources.length > 0 && (
+        <section className="panel pending-sources">
+          <div className="panel-heading"><div><span className="eyebrow">Evaluation queue</span><h3>按来源评测</h3></div></div>
+          <div className="pending-source-list">{pendingSources.map((source) => <div className="pending-source-row" key={source.id}><div><strong>{source.name}</strong><span>{source.pending_evaluation_count} 个待评测 Skill</span></div><button className="button secondary compact" disabled={Boolean(busy) || current.provider === "disabled"} onClick={() => evaluate(source)}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}开始评测</button></div>)}</div>
+        </section>
+      )}
+
+      <section className="panel proposal-panel">
+        <div className="panel-heading"><div><span className="eyebrow">Human review gate</span><h3>评测提案</h3></div><span className="badge neutral">{snapshot.llm.proposals.length} 项</span></div>
+        {snapshot.llm.proposals.length ? <div className="proposal-list">{snapshot.llm.proposals.map((proposal) => <article className="proposal-card" key={proposal.id}><div className="proposal-heading"><div><strong>{proposal.skill_name}</strong><span>{proposal.source_name} · {proposal.provider}{proposal.model ? `/${proposal.model}` : ""}</span></div><div className="proposal-score"><strong>{proposal.score != null ? proposal.score.toFixed(1) : "—"}</strong><small>/ 10 质量分</small></div></div><div className="proposal-category"><span>{proposal.category_l1}</span><ArrowRight size={13} /><span>{proposal.category_l2}</span>{proposal.category_candidate && <i className="badge warning">新二级分类候选</i>}</div><p>{proposal.problem}</p><small>{proposal.use_case}</small><div className="proposal-actions"><button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onReject(proposal.id)}>{busy === `evaluation-reject-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}拒绝</button><button className="button primary compact" disabled={Boolean(busy) || !proposal.current_content} onClick={() => apply(proposal.id, proposal.has_annotation)}>{busy === `evaluation-apply-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{proposal.has_annotation ? "替换现有整理" : "应用提案"}</button></div></article>)}</div> : <div className="history-empty"><Sparkles size={20} /><span>还没有待审核的 LLM 评测提案。</span></div>}
+      </section>
+    </div>
+  );
+}
+
+function projectHistoryLabel(event: ProjectHistoryEvent): string {
+  const labels = { apply: "应用 Skills", sync: "同步来源变更", unlink: "移除 Skills" };
+  return `${labels[event.action]} · ${event.count} 项`;
+}
+
+function ProjectsView({ library, onError }: { library: string; onError: (message: string | null) => void }) {
+  const initialDraft = useMemo(() => loadProjectDraft(localStorage, library), [library]);
+  const [screen, setScreen] = useState<"list" | "detail">("list");
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [project, setProject] = useState(initialDraft.project);
+  const [requirement, setRequirement] = useState(initialDraft.requirement);
+  const [target, setTarget] = useState<ProjectDraft["target"]>(initialDraft.target);
+  const [allowRisk, setAllowRisk] = useState(initialDraft.allowRisk);
+  const [plan, setPlan] = useState<ProjectPlan | null>(null);
+  const [status, setStatus] = useState<ProjectStatus | null>(null);
+  const [history, setHistory] = useState<ProjectHistoryEvent[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [riskConfirmed, setRiskConfirmed] = useState(false);
+
+  useEffect(() => {
+    saveProjectDraft(localStorage, library, {
+      project, requirement, target, allowRisk,
+    });
+  }, [library, project, requirement, target, allowRisk]);
+
+  const loadProjects = useCallback(async () => {
+    setProjectsLoading(true);
+    try { setProjects(await api.projectList(library)); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setProjectsLoading(false); }
+  }, [library, onError]);
+
+  useEffect(() => { void loadProjects(); }, [loadProjects]);
+
+  const loadProjectContext = useCallback(async (path: string, reportError = false) => {
+    if (!path.trim()) { setStatus(null); setHistory([]); return; }
+    setHistoryLoading(true);
+    try {
+      const [nextStatus, nextHistory] = await Promise.all([
+        api.projectStatus(library, path),
+        api.projectHistory(library, path),
+      ]);
+      setStatus(nextStatus); setHistory(nextHistory.events);
+    } catch (reason) {
+      setStatus(null); setHistory([]);
+      if (reportError) onError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [library, onError]);
+
+  useEffect(() => {
+    if (initialDraft.project) void loadProjectContext(initialDraft.project);
+  }, [initialDraft.project, loadProjectContext]);
+
+  const chooseProject = async () => {
+    const selectedPath = await open({ directory: true, multiple: false, title: "选择要初始化的项目" });
+    if (typeof selectedPath === "string") {
+      setProject(selectedPath); setPlan(null); setStatus(null); setSelected(new Set());
+      await loadProjectContext(selectedPath, true);
+    }
+  };
+
+  const openManagedProject = async (item: ProjectSummary) => {
+    if (item.status !== "active") return;
+    setProject(item.path); setPlan(null); setSelected(new Set()); setScreen("detail");
+    await loadProjectContext(item.path, true);
+  };
+
+  const importProject = async () => {
+    const selectedPath = await open({ directory: true, multiple: false, title: "导入已有 Adaptive Skills 项目" });
+    if (typeof selectedPath !== "string") return;
+    await run("project-register", async () => {
+      const registered = await api.projectRegister(library, selectedPath);
+      await loadProjects();
+      await openManagedProject(registered);
+    });
+  };
+
+  const relinkProject = async (item: ProjectSummary) => {
+    const selectedPath = await open({ directory: true, multiple: false, title: `重新定位 ${item.display_name}` });
+    if (typeof selectedPath !== "string") return;
+    await run("project-relink", async () => {
+      await api.projectRelink(library, item.id, selectedPath);
+      await loadProjects();
+    });
+  };
+
+  const forgetProject = async (item: ProjectSummary) => {
+    if (!window.confirm(`从列表中移除“${item.display_name}”？项目目录和 manifest 都会保留。`)) return;
+    await run("project-forget", async () => {
+      await api.projectForget(library, item.id);
+      await loadProjects();
+    });
+  };
+
+  async function run(label: string, action: () => Promise<void>) {
+    setBusy(label); onError(null);
+    try { await action(); } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(null); }
+  }
+
+  const createPlan = () => run("plan", async () => {
+    const next = await api.projectPlan(library, project, requirement, target, allowRisk);
+    setPlan(next); setSelected(new Set()); setRiskConfirmed(false);
+    await loadProjectContext(project);
+  });
+
+  const toggle = (skill: SkillSummary) => {
+    if (!canSelectSkill(skill, allowRisk)) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      next.has(skill.id) ? next.delete(skill.id) : next.add(skill.id);
+      return next;
+    });
+  };
+
+  const riskySelected = plan ? selectedRiskCount(plan.recommendations, selected) : 0;
+  const apply = () => run("apply", async () => {
+    await api.projectApply(library, project, Array.from(selected), requirement, target, allowRisk);
+    await loadProjectContext(project); await loadProjects(); setConfirming(false); setSelected(new Set());
+  });
+  const sync = (force = false) => run("sync", async () => { await api.projectSync(library, project, allowRisk, force); await loadProjectContext(project); await loadProjects(); });
+  const unlinkEntry = (skillId: string, force = false) => run("unlink", async () => { await api.projectUnlink(library, project, [skillId], force); await loadProjectContext(project); await loadProjects(); });
+  const clearDraft = () => {
+    clearProjectDraft(localStorage, library);
+    setProject(EMPTY_PROJECT_DRAFT.project);
+    setRequirement(EMPTY_PROJECT_DRAFT.requirement);
+    setTarget(EMPTY_PROJECT_DRAFT.target);
+    setAllowRisk(EMPTY_PROJECT_DRAFT.allowRisk);
+    setPlan(null); setStatus(null); setHistory([]); setSelected(new Set());
+  };
+
+  if (screen === "list") {
+    return <div className="stack gap-lg project-index">
+      <section className="panel project-index-hero">
+        <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>这里是管理过的项目入口。每个项目自己的 manifest 仍是历史和软链接状态的权威来源。</p></div>
+        <div className="button-row"><button className="button secondary" disabled={Boolean(busy)} onClick={() => void importProject()}><FolderOpen size={16} />导入已有项目</button><button className="button primary" onClick={() => { if (project && !window.confirm("开始新配置会清空当前草稿，是否继续？")) return; clearDraft(); setScreen("detail"); }}><Plus size={16} />新建项目配置</button></div>
+      </section>
+      {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
+      <section className="project-index-grid">
+        {projects.map((item) => <article className={`panel managed-project-card status-${item.status}`} key={item.id}>
+          <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon"><Link2 size={18} /></div><div><span className={`badge ${item.status === "active" ? item.clean ? "success" : "warning" : "warning"}`}>{item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
+          <div className="managed-project-meta"><span>{item.entry_count} 个 Skills</span><span>{item.history_count} 条操作</span><span>{formatDate(item.last_activity_at)}</span></div>
+          <div className="managed-project-actions">{item.status !== "active" && <button className="text-button" onClick={() => void relinkProject(item)}><FolderOpen size={13} />重新定位</button>}<button className="text-button danger" onClick={() => void forgetProject(item)}><Trash2 size={13} />仅从列表移除</button></div>
+        </article>)}
+      </section>
+      {projectsLoading && <div className="history-empty"><LoaderCircle className="spin" size={18} /><span>正在读取项目列表…</span></div>}
+      {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有管理过的项目</h3><p>新建项目配置并首次应用 Skill 后会自动出现在这里；也可以导入已有 manifest 的项目。</p></div>}
+    </div>;
+  }
+
+  return (
+    <div className="project-layout">
+      <section className="panel project-builder">
+        <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> 项目与需求</div><button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button></div>
+        <h2>按项目选择 Skills</h2><p className="muted">先生成可解释方案；只有被勾选的 Skill 才会创建软链接。</p>
+        <label className="input-field"><span>项目目录</span><div className="input-with-button"><input value={project} onChange={(event) => setProject(event.target.value)} placeholder="/path/to/project" /><button type="button" onClick={chooseProject}><FolderOpen size={17} /></button></div></label>
+        <label className="input-field"><span>项目需要什么能力？</span><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} rows={5} placeholder="例如：根据技术方案制作结构清晰的中文演示文稿，并检查视觉一致性。" /></label>
+        <div className="two-columns"><label className="input-field"><span>目标 Agent</span><select value={target} onChange={(event) => setTarget(event.target.value as ProjectDraft["target"])}><option value="auto">通用 .agents/skills</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label><label className="risk-toggle"><input type="checkbox" checked={allowRisk} onChange={(event) => { setAllowRisk(event.target.checked); setPlan(null); setSelected(new Set()); }} /><span><ShieldAlert size={17} /><strong>显示高风险结果</strong><small>应用前仍需二次确认</small></span></label></div>
+        <button className="button primary wide" disabled={!project.trim() || !requirement.trim() || Boolean(busy)} onClick={() => void createPlan()}>{busy === "plan" ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}生成推荐方案</button>
+      </section>
+
+      <section className="project-results">
+        {!plan ? (
+          <div className="project-placeholder"><div className="placeholder-graphic"><Search size={27} /></div><h3>从需求开始</h3><p>系统会结合 Excel 分类、人工评分、Skill 描述和风险规则，解释每个推荐。</p><div className="flow-hint"><span>需求</span><ArrowRight size={14} /><span>推荐</span><ArrowRight size={14} /><span>确认</span><ArrowRight size={14} /><span>软链接</span></div></div>
+        ) : (
+          <div className="stack gap-md">
+            <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>推荐 {plan.recommendations.length} 个 Skills</h2></div><span className="selection-count">已选择 {selected.size}</span></div>
+            <div className="recommendation-list">
+              {plan.recommendations.map((skill, index) => {
+                const selectable = canSelectSkill(skill, allowRisk);
+                return (
+                  <button className={`recommendation ${selected.has(skill.id) ? "selected" : ""} ${!selectable ? "disabled" : ""}`} key={skill.id} onClick={() => toggle(skill)} disabled={!selectable}>
+                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className="checkbox">{selected.has(skill.id) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong><i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}</span><p>{skill.description}</p><small>{skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title="需求匹配排序分，不是 0–10 质量分"><small>匹配</small>{skill.score?.toFixed(1) || "—"}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button className="button primary wide" disabled={!selected.size || Boolean(busy)} onClick={() => setConfirming(true)}><Link2 size={17} />预览并应用 {selected.size} 个 Skills</button>
+          </div>
+        )}
+
+        {status && status.entries.length > 0 && (
+          <section className="panel project-status-panel">
+            <div className="panel-heading"><div><span className="eyebrow">Managed manifest</span><h3>已挂载 Skills</h3></div><span className={status.clean ? "badge success" : "badge warning"}>{status.clean ? "全部同步" : "检测到漂移"}</span></div>
+            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}</span></div><span className="entry-state">{entry.state}</span><button title="移除链接" disabled={Boolean(busy)} onClick={() => void unlinkEntry(entry.skill_id)}><Unlink size={15} /></button></div>)}</div>
+            {!status.clean && <button className="button secondary wide" disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步来源变更</button>}
+          </section>
+        )}
+
+        {project.trim() && (
+          <section className="panel project-history-panel">
+            <div className="panel-heading"><div><span className="eyebrow">Project activity</span><h3>操作历史</h3></div><button className="text-button" disabled={historyLoading || Boolean(busy)} onClick={() => void loadProjectContext(project, true)}><RefreshCw className={historyLoading ? "spin" : ""} size={14} />刷新</button></div>
+            {history.length ? <div className="project-history-list">{history.map((event) => <div className="project-history-row" key={event.id}><div className={`history-icon action-${event.action}`}><History size={14} /></div><div><strong>{projectHistoryLabel(event)}</strong><span>{event.skill_names?.join("、") || "没有需要变更的 Skill"}</span>{event.requirement && <small>{event.requirement}</small>}</div><time>{formatDate(event.created_at)}</time></div>)}</div> : <div className="history-empty"><History size={20} /><span>{historyLoading ? "正在读取历史…" : "还没有成功的应用、同步或移除记录。"}</span></div>}
+          </section>
+        )}
+      </section>
+
+      {confirming && plan && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setConfirming(false)}>
+          <div className="confirm-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="confirm-icon"><Link2 size={22} /></div><h2>确认创建项目软链接</h2><p>将 {selected.size} 个 Skill 挂载到 <strong>{plan.target}</strong>。只管理本次写入 manifest 的条目，不覆盖未登记内容。</p>
+            <div className="confirm-summary"><span>项目</span><strong>{project}</strong><span>方式</span><strong>symlink</strong><span>高风险 Skill</span><strong>{riskySelected}</strong></div>
+            {riskySelected > 0 && <label className="confirm-risk"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} /><span>我已审查所选高风险 Skill，并接受其静态审计结果。</span></label>}
+            <div className="button-row"><button className="button ghost" onClick={() => setConfirming(false)}>返回检查</button><button className="button primary" disabled={Boolean(busy) || (riskySelected > 0 && !riskConfirmed)} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}确认应用</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkillDrawer({ skill, onClose }: { skill: SkillDetail; onClose: () => void }) {
+  return (
+    <div className="drawer-backdrop" onMouseDown={onClose}>
+      <aside className="skill-drawer" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-header"><div><span className="eyebrow">{skill.source_name} / {skill.rel_path}</span><h2>{skill.name}</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></div>
+        <p className="drawer-description">{skill.description}</p>
+        <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.valid ? "badge success" : "badge warning"}>{skill.valid ? "规范有效" : "需要修复"}</span>{skill.score != null && <span className="badge neutral">人工评分 {skill.score}</span>}</div>
+        <div className="detail-grid"><div><span>一级分类</span><strong>{skill.category_l1 || "未分类"}</strong></div><div><span>二级分类</span><strong>{skill.category_l2 || "未分类"}</strong></div><div><span>许可证</span><strong>{skill.license || "未声明"}</strong></div><div><span>来源提交</span><strong>{shortSha(skill.head_sha)}</strong></div></div>
+        {(skill.problem || skill.use_case) && <section className="drawer-section"><h3>人工整理</h3>{skill.problem && <div className="insight-block"><span>解决的问题</span><p>{skill.problem}</p></div>}{skill.use_case && <div className="insight-block"><span>应用场景</span><p>{skill.use_case}</p></div>}</section>}
+        <section className="drawer-section"><h3>验证与风险</h3>{!skill.validation.length && !skill.audit.length ? <div className="clean-callout"><ShieldCheck size={18} /><span>未发现规范错误或高信号静态风险。</span></div> : <div className="finding-list">{[...skill.validation, ...skill.audit].map((finding, index) => <div className="finding" key={`${finding.rule}-${index}`}><AlertTriangle size={15} /><div><strong>{finding.rule}</strong><p>{finding.message}</p><span>{finding.file}{finding.line ? `:${finding.line}` : ""}</span></div></div>)}</div>}</section>
+        <section className="drawer-section"><div className="section-title-row"><h3>SKILL.md</h3><span>{skill.skill_md_path}</span></div><pre className="skill-content">{skill.body || "（正文为空）"}</pre></section>
+      </aside>
+    </div>
+  );
+}
+
+function ActivityToast({ label }: { label: string }) {
+  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
+  const message = messages[label] || (label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
+  return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
+}
+
+export default App;
