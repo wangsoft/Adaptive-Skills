@@ -1,4 +1,6 @@
 export type ProjectTarget = "auto" | "codex" | "claude";
+export type DraftLLMProvider = "codex" | "claude" | "openai-compatible";
+export type DraftLLMAPIMode = "auto" | "responses" | "chat-completions";
 
 export interface ProjectDraft {
   project: string;
@@ -11,6 +13,26 @@ export interface SourceDraft {
   adding: boolean;
   url: string;
   name: string;
+}
+
+export interface SkillFilterDraft {
+  query: string;
+  risk: string;
+  source: string;
+  category: string;
+}
+
+export interface LLMProfileDraft {
+  open: boolean;
+  editingId: string | null;
+  profileId: string;
+  name: string;
+  provider: DraftLLMProvider;
+  model: string;
+  baseUrl: string;
+  apiMode: DraftLLMAPIMode;
+  timeout: number;
+  maxPerRun: number;
 }
 
 export const EMPTY_PROJECT_DRAFT: ProjectDraft = {
@@ -26,7 +48,27 @@ export const EMPTY_SOURCE_DRAFT: SourceDraft = {
   name: "",
 };
 
-function key(kind: "project" | "source", library: string): string {
+export const EMPTY_SKILL_FILTER_DRAFT: SkillFilterDraft = {
+  query: "",
+  risk: "all",
+  source: "all",
+  category: "all",
+};
+
+export const EMPTY_LLM_PROFILE_DRAFT: LLMProfileDraft = {
+  open: false,
+  editingId: null,
+  profileId: "",
+  name: "",
+  provider: "openai-compatible",
+  model: "",
+  baseUrl: "https://api.openai.com/v1",
+  apiMode: "auto",
+  timeout: 300,
+  maxPerRun: 20,
+};
+
+function key(kind: "project" | "source" | "skills" | "llm", library: string): string {
   return `adaptive-skills:${kind}-draft:${library}`;
 }
 
@@ -106,4 +148,97 @@ export function clearSourceDraft(storage: Storage, library: string): void {
   } catch {
     // The in-memory form can still be cleared when storage is unavailable.
   }
+}
+
+export function loadSkillFilterDraft(
+  storage: Storage,
+  library: string,
+): SkillFilterDraft {
+  const value = read(storage, key("skills", library));
+  if (!value || typeof value !== "object") return { ...EMPTY_SKILL_FILTER_DRAFT };
+  const draft = value as Partial<SkillFilterDraft>;
+  return {
+    query: typeof draft.query === "string" ? draft.query : "",
+    risk: typeof draft.risk === "string" ? draft.risk : "all",
+    source: typeof draft.source === "string" ? draft.source : "all",
+    category: typeof draft.category === "string" ? draft.category : "all",
+  };
+}
+
+export function saveSkillFilterDraft(
+  storage: Storage,
+  library: string,
+  draft: SkillFilterDraft,
+): void {
+  write(storage, key("skills", library), draft);
+}
+
+export function clearSkillFilterDraft(storage: Storage, library: string): void {
+  try {
+    storage.removeItem(key("skills", library));
+  } catch {
+    // The in-memory filters can still be reset when storage is unavailable.
+  }
+}
+
+export function loadLLMProfileDraft(
+  storage: Storage,
+  library: string,
+): LLMProfileDraft {
+  const value = read(storage, key("llm", library));
+  if (!value || typeof value !== "object") return { ...EMPTY_LLM_PROFILE_DRAFT };
+  const draft = value as Partial<LLMProfileDraft>;
+  const provider = ["codex", "claude", "openai-compatible"].includes(String(draft.provider))
+    ? draft.provider as DraftLLMProvider
+    : EMPTY_LLM_PROFILE_DRAFT.provider;
+  const apiMode = ["auto", "responses", "chat-completions"].includes(String(draft.apiMode))
+    ? draft.apiMode as DraftLLMAPIMode
+    : EMPTY_LLM_PROFILE_DRAFT.apiMode;
+  const timeout = Number.isFinite(draft.timeout) && Number(draft.timeout) >= 30 && Number(draft.timeout) <= 1800
+    ? Number(draft.timeout)
+    : EMPTY_LLM_PROFILE_DRAFT.timeout;
+  const maxPerRun = Number.isFinite(draft.maxPerRun) && Number(draft.maxPerRun) >= 1 && Number(draft.maxPerRun) <= 100
+    ? Number(draft.maxPerRun)
+    : EMPTY_LLM_PROFILE_DRAFT.maxPerRun;
+  return {
+    open: typeof draft.open === "boolean" ? draft.open : false,
+    editingId: typeof draft.editingId === "string" && draft.editingId ? draft.editingId : null,
+    profileId: typeof draft.profileId === "string" ? draft.profileId : "",
+    name: typeof draft.name === "string" ? draft.name : "",
+    provider,
+    model: typeof draft.model === "string" ? draft.model : "",
+    baseUrl: typeof draft.baseUrl === "string" && draft.baseUrl
+      ? draft.baseUrl
+      : EMPTY_LLM_PROFILE_DRAFT.baseUrl,
+    apiMode,
+    timeout,
+    maxPerRun,
+  };
+}
+
+export function saveLLMProfileDraft(
+  storage: Storage,
+  library: string,
+  draft: LLMProfileDraft,
+): void {
+  write(storage, key("llm", library), draft);
+}
+
+export function clearLLMProfileDraft(storage: Storage, library: string): void {
+  try {
+    storage.removeItem(key("llm", library));
+  } catch {
+    // The in-memory form can still be reset when storage is unavailable.
+  }
+}
+
+export function hasLLMProfileDraft(draft: LLMProfileDraft): boolean {
+  return Boolean(
+    draft.editingId || draft.profileId || draft.name || draft.model ||
+    draft.provider !== EMPTY_LLM_PROFILE_DRAFT.provider ||
+    draft.baseUrl !== EMPTY_LLM_PROFILE_DRAFT.baseUrl ||
+    draft.apiMode !== EMPTY_LLM_PROFILE_DRAFT.apiMode ||
+    draft.timeout !== EMPTY_LLM_PROFILE_DRAFT.timeout ||
+    draft.maxPerRun !== EMPTY_LLM_PROFILE_DRAFT.maxPerRun
+  );
 }

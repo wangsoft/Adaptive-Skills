@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearLLMProfileDraft,
+  clearSkillFilterDraft,
   clearSourceDraft,
+  hasLLMProfileDraft,
+  loadLLMProfileDraft,
   loadProjectDraft,
+  loadSkillFilterDraft,
   loadSourceDraft,
+  saveLLMProfileDraft,
   saveProjectDraft,
+  saveSkillFilterDraft,
   saveSourceDraft,
 } from "./drafts";
 
@@ -56,5 +63,48 @@ describe("navigation-safe form drafts", () => {
       url: "",
       name: "",
     });
+  });
+
+  it("restores skill filters and can reset them", () => {
+    const storage = new MemoryStorage();
+    saveSkillFilterDraft(storage, "/library", {
+      query: "制作技术演示",
+      risk: "low",
+      source: "presentations",
+      category: "演示与文档",
+    });
+    expect(loadSkillFilterDraft(storage, "/library")).toEqual({
+      query: "制作技术演示",
+      risk: "low",
+      source: "presentations",
+      category: "演示与文档",
+    });
+    clearSkillFilterDraft(storage, "/library");
+    expect(loadSkillFilterDraft(storage, "/library").risk).toBe("all");
+  });
+
+  it("restores an LLM connection draft without ever storing a secret", () => {
+    const storage = new MemoryStorage();
+    saveLLMProfileDraft(storage, "/library", {
+      open: true,
+      editingId: null,
+      profileId: "company-model",
+      name: "公司模型",
+      provider: "openai-compatible",
+      model: "company-gpt",
+      baseUrl: "https://llm.example.test/v1",
+      apiMode: "chat-completions",
+      timeout: 600,
+      maxPerRun: 12,
+    });
+
+    const restored = loadLLMProfileDraft(storage, "/library");
+    expect(restored.profileId).toBe("company-model");
+    expect(restored.apiMode).toBe("chat-completions");
+    expect(hasLLMProfileDraft(restored)).toBe(true);
+    expect(storage.getItem("adaptive-skills:llm-draft:/library")).not.toContain("apiKey");
+
+    clearLLMProfileDraft(storage, "/library");
+    expect(hasLLMProfileDraft(loadLLMProfileDraft(storage, "/library"))).toBe(false);
   });
 });

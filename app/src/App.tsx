@@ -38,12 +38,20 @@ import {
   shortSha,
 } from "./domain";
 import {
+  clearLLMProfileDraft,
   clearProjectDraft,
+  clearSkillFilterDraft,
   clearSourceDraft,
+  EMPTY_LLM_PROFILE_DRAFT,
   EMPTY_PROJECT_DRAFT,
+  hasLLMProfileDraft,
+  loadLLMProfileDraft,
   loadProjectDraft,
+  loadSkillFilterDraft,
   loadSourceDraft,
+  saveLLMProfileDraft,
   saveProjectDraft,
+  saveSkillFilterDraft,
   saveSourceDraft,
 } from "./drafts";
 import type { ProjectDraft } from "./drafts";
@@ -67,6 +75,7 @@ import type {
 type View = "overview" | "skills" | "sources" | "projects" | "evaluation";
 
 const DEFAULT_LIBRARY = "~/skills";
+const LAST_VIEW_KEY = "adaptive-skills:last-view";
 
 const NAV_ITEMS: Array<{
   id: View;
@@ -81,11 +90,20 @@ const NAV_ITEMS: Array<{
   { id: "projects", label: "项目", description: "按需挂载 Skills", icon: Link2 },
 ];
 
+function loadLastView(): View {
+  try {
+    const value = localStorage.getItem(LAST_VIEW_KEY);
+    return NAV_ITEMS.some((item) => item.id === value) ? value as View : "overview";
+  } catch {
+    return "overview";
+  }
+}
+
 function App() {
   const [library, setLibrary] = useState(
     () => localStorage.getItem("adaptive-skills-library") || DEFAULT_LIBRARY,
   );
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>(loadLastView);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -114,6 +132,15 @@ function App() {
   useEffect(() => {
     void loadSnapshot();
   }, [loadSnapshot]);
+
+  useEffect(() => {
+    try { localStorage.setItem(LAST_VIEW_KEY, view); } catch { /* best-effort */ }
+  }, [view]);
+
+  const navigate = (nextView: View) => {
+    setDetail(null);
+    setView(nextView);
+  };
 
   const chooseLibrary = async () => {
     const selected = await open({ directory: true, multiple: false, title: "选择 Skills 目录" });
@@ -187,7 +214,7 @@ function App() {
               <button
                 className={`nav-item ${view === item.id ? "active" : ""}`}
                 key={item.id}
-                onClick={() => setView(item.id)}
+                onClick={() => navigate(item.id)}
               >
                 <Icon size={19} />
                 <span><strong>{item.label}</strong><small>{item.description}</small></span>
@@ -239,9 +266,10 @@ function App() {
           <LoadingState />
         ) : snapshot ? (
           <div className="view-container">
-            {view === "overview" && <Overview snapshot={snapshot} onNavigate={setView} />}
+            {view === "overview" && <Overview snapshot={snapshot} onNavigate={navigate} />}
             {view === "skills" && (
               <SkillsView
+                key={library}
                 snapshot={snapshot}
                 onSearch={loadSnapshot}
                 onReset={() => loadSnapshot()}
@@ -420,10 +448,16 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
   onOpen: (skill: SkillSummary) => void;
   detailLoading: boolean;
 }) {
-  const [query, setQuery] = useState(snapshot.query || "");
-  const [risk, setRisk] = useState<string>("all");
-  const [source, setSource] = useState("all");
-  const [category, setCategory] = useState("all");
+  const library = snapshot.library.path;
+  const initialDraft = useMemo(() => loadSkillFilterDraft(localStorage, library), [library]);
+  const categories = Array.from(new Set(snapshot.filters.categories.map((item) => item.category_l1).filter(Boolean))) as string[];
+  const [query, setQuery] = useState(initialDraft.query || snapshot.query || "");
+  const [risk, setRisk] = useState<string>(snapshot.filters.risks.includes(initialDraft.risk as RiskLevel) ? initialDraft.risk : "all");
+  const [source, setSource] = useState(snapshot.sources.some((item) => item.name === initialDraft.source) ? initialDraft.source : "all");
+  const [category, setCategory] = useState(categories.includes(initialDraft.category) ? initialDraft.category : "all");
+  useEffect(() => {
+    saveSkillFilterDraft(localStorage, library, { query, risk, source, category });
+  }, [library, query, risk, source, category]);
   const filtered = useMemo(
     () => snapshot.skills.filter((skill) =>
       (risk === "all" || skill.audit_severity === risk) &&
@@ -432,11 +466,15 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
     ),
     [snapshot.skills, risk, source, category],
   );
-  const categories = Array.from(new Set(snapshot.filters.categories.map((item) => item.category_l1).filter(Boolean))) as string[];
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void (query.trim() ? onSearch(query.trim()) : onReset());
+  };
+  const resetFilters = () => {
+    setQuery(""); setRisk("all"); setSource("all"); setCategory("all");
+    clearSkillFilterDraft(localStorage, library);
+    void onReset();
   };
 
   return (
@@ -444,13 +482,14 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
       <section className="panel filter-panel">
         <form className="search-field" onSubmit={submit}>
           <Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="描述项目需求，或搜索 Skill 名称…" />
-          {snapshot.query && <button type="button" className="clear-search" onClick={() => { setQuery(""); void onReset(); }}><X size={15} /></button>}
+          {query && <button type="button" className="clear-search" aria-label="清空检索" onClick={() => { setQuery(""); if (snapshot.query) void onReset(); }}><X size={15} /></button>}
           <button className="button primary compact" type="submit">需求检索</button>
         </form>
         <div className="filter-row">
           <FilterSelect label="风险" value={risk} onChange={setRisk} options={[{ value: "all", label: "全部风险" }, ...snapshot.filters.risks.map((value) => ({ value, label: riskLabel(value) }))]} />
           <FilterSelect label="来源" value={source} onChange={setSource} options={[{ value: "all", label: "全部来源" }, ...snapshot.sources.map((item) => ({ value: item.name, label: item.name }))]} />
           <FilterSelect label="分类" value={category} onChange={setCategory} options={[{ value: "all", label: "全部分类" }, ...categories.map((value) => ({ value, label: value }))]} />
+          {(query || risk !== "all" || source !== "all" || category !== "all") && <button type="button" className="text-button" onClick={resetFilters}>重置筛选</button>}
           <span className="result-count">显示 {filtered.length} / {snapshot.summary.skill_count}</span>
         </div>
       </section>
@@ -606,25 +645,40 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   onReject: (evaluationId: string) => Promise<boolean>;
 }) {
   const current = snapshot.llm.config;
-  const [showForm, setShowForm] = useState(current.profiles.length === 0);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [profileId, setProfileId] = useState("");
-  const [name, setName] = useState("");
-  const [provider, setProvider] = useState<LLMProfileProvider>("openai-compatible");
-  const [model, setModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [apiMode, setApiMode] = useState<LLMAPIMode>("auto");
+  const library = snapshot.library.path;
+  const storedDraft = useMemo(() => loadLLMProfileDraft(localStorage, library), [library]);
+  const initialDraft = storedDraft.editingId && !current.profiles.some((profile) => profile.id === storedDraft.editingId)
+    ? { ...EMPTY_LLM_PROFILE_DRAFT }
+    : storedDraft;
+  const [showForm, setShowForm] = useState(current.profiles.length === 0 || initialDraft.open);
+  const [editingId, setEditingId] = useState<string | null>(initialDraft.editingId);
+  const [profileId, setProfileId] = useState(initialDraft.profileId);
+  const [name, setName] = useState(initialDraft.name);
+  const [provider, setProvider] = useState<LLMProfileProvider>(initialDraft.provider);
+  const [model, setModel] = useState(initialDraft.model);
+  const [baseUrl, setBaseUrl] = useState(initialDraft.baseUrl);
+  const [apiMode, setApiMode] = useState<LLMAPIMode>(initialDraft.apiMode);
   const [apiKey, setApiKey] = useState("");
-  const [timeout, setTimeoutValue] = useState(300);
-  const [maxPerRun, setMaxPerRun] = useState(20);
+  const [timeout, setTimeoutValue] = useState(initialDraft.timeout);
+  const [maxPerRun, setMaxPerRun] = useState(initialDraft.maxPerRun);
   const pendingSources = snapshot.sources.filter((source) => source.pending_evaluation_count > 0);
   const active = snapshot.llm.active_profile;
+  const profileDraft = { open: showForm, editingId, profileId, name, provider, model, baseUrl, apiMode, timeout, maxPerRun };
+  const hasDraft = hasLLMProfileDraft(profileDraft);
+
+  useEffect(() => {
+    saveLLMProfileDraft(localStorage, library, profileDraft);
+  }, [library, showForm, editingId, profileId, name, provider, model, baseUrl, apiMode, timeout, maxPerRun]);
 
   const resetForm = () => {
     setEditingId(null);
     setProfileId(""); setName(""); setProvider("openai-compatible"); setModel("");
     setBaseUrl("https://api.openai.com/v1"); setApiMode("auto"); setApiKey("");
     setTimeoutValue(300); setMaxPerRun(20);
+  };
+  const discardForm = () => {
+    clearLLMProfileDraft(localStorage, library);
+    resetForm(); setApiKey(""); setShowForm(current.profiles.length === 0);
   };
   const editProfile = (profile: LLMProfile) => {
     setEditingId(profile.id);
@@ -639,7 +693,10 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
     const completed = await onSaveProfile({
       id: profileId, name, provider, model, baseUrl, apiMode, timeout, maxPerRun, activate: true,
     }, apiKey.trim() || undefined);
-    if (completed) { setApiKey(""); setShowForm(false); }
+    if (completed) {
+      clearLLMProfileDraft(localStorage, library);
+      resetForm(); setApiKey(""); setShowForm(false);
+    }
   };
   const evaluate = (source: SourceSummary) => {
     const confirmed = window.confirm(
@@ -655,7 +712,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   return (
     <div className="stack gap-lg evaluation-page">
       <section className="panel evaluator-settings">
-        <div className="panel-heading"><div><span className="eyebrow">Provider profiles</span><h3>模型连接</h3></div><div className="button-row"><button className="button ghost compact" disabled={!active || Boolean(busy)} onClick={() => void onDisable()}>暂停评测</button><button className="button primary compact" disabled={Boolean(busy)} onClick={() => { resetForm(); setShowForm(true); }}><Plus size={15} />添加连接</button></div></div>
+        <div className="panel-heading"><div><span className="eyebrow">Provider profiles</span><h3>模型连接</h3></div><div className="button-row"><button className="button ghost compact" disabled={!active || Boolean(busy)} onClick={() => void onDisable()}>暂停评测</button><button className="button primary compact" disabled={Boolean(busy)} onClick={() => { if (!hasDraft) resetForm(); setShowForm(true); }}><Plus size={15} />{hasDraft ? "继续未保存连接" : "添加连接"}</button></div></div>
         <p className="muted">支持 Codex CLI、Claude Code 和 OpenAI-compatible API。API Key 只写入系统凭据库，不进入目录配置、命令参数或评测记录。</p>
         <div className="llm-profile-list">
           {current.profiles.map((profile) => {
@@ -670,7 +727,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
           {!current.profiles.length && <div className="history-empty"><Settings2 size={20} /><span>还没有模型连接。添加一个连接后才能对新 Skill 生成分类和评分提案。</span></div>}
         </div>
         {showForm && <form className="evaluation-profile-form" onSubmit={(event) => void save(event)}>
-          <div className="profile-form-heading"><strong>{editingId ? "编辑连接" : "新建连接"}</strong><button type="button" className="icon-button" onClick={() => setShowForm(false)}><X size={15} /></button></div>
+          <div className="profile-form-heading"><div><strong>{editingId ? "编辑连接" : "新建连接"}</strong><small>非密钥字段会自动保存为本地草稿；API Key 切换页面后需重新输入。</small></div><div className="button-row"><button type="button" className="text-button danger" onClick={discardForm}>清空草稿</button><button type="button" className="icon-button" aria-label="收起连接表单" onClick={() => setShowForm(false)}><X size={15} /></button></div></div>
           <label className="input-field"><span>连接 ID</span><input required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" value={profileId} disabled={Boolean(editingId)} onChange={(event) => setProfileId(event.target.value)} placeholder="office-model" /></label>
           <label className="input-field"><span>显示名称</span><input required value={name} onChange={(event) => setName(event.target.value)} placeholder="公司模型" /></label>
           <label className="input-field"><span>连接方式</span><select value={provider} disabled={Boolean(editingId)} onChange={(event) => setProvider(event.target.value as LLMProfileProvider)}><option value="openai-compatible">OpenAI-compatible API</option><option value="codex">Codex CLI</option><option value="claude">Claude Code</option></select></label>
