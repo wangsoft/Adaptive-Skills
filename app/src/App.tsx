@@ -105,6 +105,19 @@ function loadLastView(): View {
   }
 }
 
+function useEscapeKey(active: boolean, onEscape: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onEscape();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [active, onEscape]);
+}
+
 function App() {
   const [library, setLibrary] = useState(
     () => localStorage.getItem("adaptive-skills-library") || DEFAULT_LIBRARY,
@@ -147,6 +160,7 @@ function App() {
     setDetail(null);
     setView(nextView);
   };
+  useEscapeKey(Boolean(detail), () => setDetail(null));
 
   const chooseLibrary = async () => {
     const selected = await open({ directory: true, multiple: false, title: "选择 Skills 目录" });
@@ -221,6 +235,7 @@ function App() {
                 className={`nav-item ${view === item.id ? "active" : ""}`}
                 key={item.id}
                 onClick={() => navigate(item.id)}
+                aria-current={view === item.id ? "page" : undefined}
               >
                 <Icon size={19} />
                 <span><strong>{item.label}</strong><small>{item.description}</small></span>
@@ -253,6 +268,7 @@ function App() {
           <button
             className="icon-button"
             title="刷新目录"
+            aria-label="刷新目录"
             disabled={loading || Boolean(busy)}
             onClick={() => void loadSnapshot()}
           >
@@ -805,6 +821,7 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [riskConfirmed, setRiskConfirmed] = useState(false);
+  useEscapeKey(confirming, () => setConfirming(false));
 
   useEffect(() => {
     saveProjectDraft(localStorage, library, {
@@ -1004,11 +1021,11 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
 
       {confirming && plan && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setConfirming(false)}>
-          <div className="confirm-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="confirm-icon"><Link2 size={22} /></div><h2>确认创建项目软链接</h2><p>将 {selected.size} 个 Skill 挂载到 <strong>{plan.target}</strong>。只管理本次写入 manifest 的条目，不覆盖未登记内容。</p>
+          <div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-project-links-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="confirm-icon"><Link2 size={22} /></div><h2 id="confirm-project-links-title">确认创建项目软链接</h2><p>将 {selected.size} 个 Skill 挂载到 <strong>{plan.target}</strong>。只管理本次写入 manifest 的条目，不覆盖未登记内容。</p>
             <div className="confirm-summary"><span>项目</span><strong>{project}</strong><span>方式</span><strong>symlink</strong><span>高风险 Skill</span><strong>{riskySelected}</strong></div>
             {riskySelected > 0 && <label className="confirm-risk"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} /><span>我已审查所选高风险 Skill，并接受其静态审计结果。</span></label>}
-            <div className="button-row"><button className="button ghost" onClick={() => setConfirming(false)}>返回检查</button><button className="button primary" disabled={Boolean(busy) || (riskySelected > 0 && !riskConfirmed)} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}确认应用</button></div>
+            <div className="button-row"><button className="button ghost" autoFocus onClick={() => setConfirming(false)}>返回检查</button><button className="button primary" disabled={Boolean(busy) || (riskySelected > 0 && !riskConfirmed)} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}确认应用</button></div>
           </div>
         </div>
       )}
@@ -1018,9 +1035,9 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
 
 function SkillDrawer({ skill, onClose }: { skill: SkillDetail; onClose: () => void }) {
   return (
-    <div className="drawer-backdrop" onMouseDown={onClose}>
-      <aside className="skill-drawer" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="drawer-header"><div><span className="eyebrow">{skill.source_name} / {skill.rel_path}</span><h2>{skill.name}</h2></div><button className="icon-button" onClick={onClose}><X size={18} /></button></div>
+    <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
+      <aside className="skill-drawer" role="dialog" aria-modal="true" aria-labelledby="skill-drawer-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawer-header"><div><span className="eyebrow">{skill.source_name} / {skill.rel_path}</span><h2 id="skill-drawer-title">{skill.name}</h2></div><button className="icon-button" autoFocus aria-label="关闭 Skill 详情" onClick={onClose}><X size={18} /></button></div>
         <p className="drawer-description">{skill.description}</p>
         <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.valid ? "badge success" : "badge warning"}>{skill.valid ? "规范有效" : "需要修复"}</span>{skill.score != null && <span className="badge neutral">人工评分 {skill.score}</span>}</div>
         <div className="detail-grid"><div><span>一级分类</span><strong>{skill.category_l1 || "未分类"}</strong></div><div><span>二级分类</span><strong>{skill.category_l2 || "未分类"}</strong></div><div><span>许可证</span><strong>{skill.license || "未声明"}</strong></div><div><span>来源提交</span><strong>{shortSha(skill.head_sha)}</strong></div></div>
