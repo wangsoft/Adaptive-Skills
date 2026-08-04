@@ -4,10 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from adaptive_skills.catalog import Catalog
+from adaptive_skills.app_service import AppService
 from adaptive_skills.config import Settings
-from adaptive_skills.errors import NotFoundError, ValidationError
+from adaptive_skills.errors import ConflictError, NotFoundError, ValidationError
 from adaptive_skills.projects import HISTORY_LIMIT, ProjectManager
 from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.sources import SourceManager
@@ -82,6 +84,96 @@ class EndToEndTests(unittest.TestCase):
                 (self.presentation["id"],),
             ).fetchone()[0]
         self.assertEqual(indexed, 1)
+
+    def test_audit_review_is_bound_to_current_source_content(self) -> None:
+        danger = self.catalog.get_skill("danger-skill")
+        finding = next(
+            item for item in danger["audit"] if item["rule"] == "shell.remote-pipe"
+        )
+
+        reviewed = self.catalog.review_audit_finding(
+            danger["id"],
+            finding["finding_id"],
+            status="reviewed_false_positive",
+            note="Pinned installer URL is only a fixture in this local skill.",
+        )
+        reviewed_finding = next(
+            item
+            for item in reviewed["audit"]
+            if item["finding_id"] == finding["finding_id"]
+        )
+        self.assertEqual(reviewed["audit_severity"], "none")
+        self.assertEqual(reviewed_finding["status"], "reviewed_false_positive")
+        self.assertIn("curl", reviewed_finding["review_content_summary"])
+        self.assertEqual(
+            AppService(self.settings).snapshot()["summary"]["risk_counts"]["critical"],
+            0,
+        )
+
+        skill_file = self.repo / "skills" / "danger-skill" / "SKILL.md"
+        skill_file.write_text(
+            skill_file.read_text(encoding="utf-8") + "\nAdditional guidance.\n",
+            encoding="utf-8",
+        )
+        self.scanner.scan(self.source["id"])
+
+        reopened = self.catalog.get_skill(danger["id"])
+        reopened_finding = next(
+            item
+            for item in reopened["audit"]
+            if item["finding_id"] == finding["finding_id"]
+        )
+        self.assertEqual(reopened["audit_severity"], "critical")
+        self.assertEqual(reopened_finding["status"], "unreviewed")
+        self.assertTrue(reopened_finding["review_stale"])
+        self.assertEqual(
+            AppService(self.settings).snapshot()["summary"]["risk_counts"]["critical"],
+            1,
+        )
+
+        confirmed = self.catalog.review_audit_finding(
+            danger["id"],
+            finding["finding_id"],
+            status="confirmed_risk",
+        )
+        confirmed_finding = next(
+            item
+            for item in confirmed["audit"]
+            if item["finding_id"] == finding["finding_id"]
+        )
+        self.assertEqual(confirmed["audit_severity"], "critical")
+        self.assertEqual(confirmed_finding["status"], "confirmed_risk")
+
+    def test_audit_review_rejects_a_concurrent_source_change(self) -> None:
+        danger = self.catalog.get_skill("danger-skill")
+        finding = next(
+            item for item in danger["audit"] if item["rule"] == "shell.remote-pipe"
+        )
+        original_get_skill = self.catalog.get_skill
+
+        def load_then_change(skill_id: str, *, active_only: bool = True):
+            loaded = original_get_skill(skill_id, active_only=active_only)
+            with self.catalog.database.transaction() as connection:
+                connection.execute(
+                    "UPDATE skills SET tree_hash = ? WHERE id = ?",
+                    ("changed-during-review", loaded["id"]),
+                )
+            return loaded
+
+        with patch.object(self.catalog, "get_skill", side_effect=load_then_change):
+            with self.assertRaisesRegex(ConflictError, "changed while"):
+                self.catalog.review_audit_finding(
+                    danger["id"],
+                    finding["finding_id"],
+                    status="reviewed_false_positive",
+                )
+
+        with self.catalog.database.transaction() as connection:
+            review_count = connection.execute(
+                "SELECT count(*) FROM audit_reviews WHERE skill_id = ?",
+                (danger["id"],),
+            ).fetchone()[0]
+        self.assertEqual(review_count, 0)
 
     def test_project_link_lifecycle(self) -> None:
         project = Path(self.temporary.name) / "project"

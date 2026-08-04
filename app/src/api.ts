@@ -11,6 +11,7 @@ import {
   llmEvaluateArgs,
   llmProfileSaveArgs,
   llmReviewArgs,
+  auditReviewArgs,
 } from "./commands";
 import type {
   AppSnapshot,
@@ -58,6 +59,16 @@ export const api = {
     runCommand<AppSnapshot>(library, snapshotArgs(query)),
   skill: (library: string, id: string) =>
     runCommand<SkillDetail>(library, ["skill", "show", id]),
+  reviewAuditFinding: (
+    library: string,
+    skillId: string,
+    findingId: string,
+    status: "reviewed_false_positive" | "confirmed_risk",
+    note?: string,
+  ) => runCommand<SkillDetail>(
+    library,
+    auditReviewArgs(skillId, findingId, status, note),
+  ),
   scan: (library: string, sourceId?: string) =>
     runCommand<unknown[]>(library, ["scan", ...(sourceId ? [sourceId] : [])]),
   addSource: (library: string, url: string, name?: string) =>

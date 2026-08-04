@@ -10,7 +10,7 @@ from typing import Any, Iterator
 from .config import Settings
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -105,6 +105,20 @@ class Database:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS audit_reviews (
+                skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+                finding_id TEXT NOT NULL,
+                finding_digest TEXT NOT NULL,
+                skill_tree_hash TEXT NOT NULL,
+                status TEXT NOT NULL
+                    CHECK(status IN ('reviewed_false_positive', 'confirmed_risk')),
+                content_summary TEXT NOT NULL,
+                note TEXT,
+                reviewed_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(skill_id, finding_id)
+            );
+
             CREATE TABLE IF NOT EXISTS llm_evaluations (
                 id TEXT PRIMARY KEY,
                 skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
@@ -175,6 +189,8 @@ class Database:
                 ON llm_evaluations(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_llm_evaluations_skill_hash
                 ON llm_evaluations(skill_id, content_hash);
+            CREATE INDEX IF NOT EXISTS idx_audit_reviews_status
+                ON audit_reviews(status, reviewed_at);
             CREATE INDEX IF NOT EXISTS idx_managed_projects_activity
                 ON managed_projects(last_activity_at DESC, updated_at DESC);
             """

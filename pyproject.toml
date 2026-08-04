@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Adaptive Skills contributors" }]
-dependencies = ["keyring>=25,<26"]
+dependencies = ["keyring>=25,<26", "PyYAML>=6,<7"]
 
 [project.optional-dependencies]
 excel = ["openpyxl>=3.1,<4"]

@@ -62,7 +62,14 @@ class AppContractTests(unittest.TestCase):
         self.assertEqual(len(snapshot["llm"]["taxonomy"]["level_one"]), 15)
         self.assertEqual(len(snapshot["skills"]), 2)
         self.assertNotIn("body", snapshot["skills"][0])
+        installer = next(
+            skill for skill in snapshot["skills"] if skill["name"] == "network-installer"
+        )
+        self.assertEqual(installer["unreviewed_risk_count"], 1)
+        self.assertEqual(installer["confirmed_risk_count"], 0)
+        self.assertEqual(installer["capability_hint_count"], 0)
         self.assertIn("categories", snapshot["filters"])
+        self.assertTrue(snapshot["capabilities"]["audit_review"])
 
     def test_snapshot_can_filter_by_query_without_exposing_risky_skills(self) -> None:
         snapshot = AppService(self.settings).snapshot(

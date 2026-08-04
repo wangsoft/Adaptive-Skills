@@ -96,6 +96,15 @@ def _cmd_skill_show(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_skill_audit_review(arguments: argparse.Namespace) -> dict[str, Any]:
+    return Catalog(_settings(arguments)).review_audit_finding(
+        arguments.skill,
+        arguments.finding,
+        status=arguments.status,
+        note=arguments.note,
+    )
+
+
 def _cmd_search(arguments: argparse.Namespace) -> list[dict[str, Any]]:
     return Catalog(_settings(arguments)).search(
         arguments.requirement,
@@ -355,6 +364,18 @@ def build_parser() -> argparse.ArgumentParser:
     skill_show.add_argument("skill")
     skill_show.add_argument("--all", action="store_true", help="Allow inactive skills")
     _handler(skill_show, _cmd_skill_show)
+    skill_audit_review = skill_commands.add_parser(
+        "audit-review", help="Review one current static audit finding"
+    )
+    skill_audit_review.add_argument("skill")
+    skill_audit_review.add_argument("finding")
+    skill_audit_review.add_argument(
+        "--status",
+        required=True,
+        choices=["reviewed_false_positive", "confirmed_risk"],
+    )
+    skill_audit_review.add_argument("--note")
+    _handler(skill_audit_review, _cmd_skill_audit_review)
 
     search = commands.add_parser(
         "search", help="Find skills for a natural-language requirement"

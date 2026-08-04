@@ -9,7 +9,7 @@ from .errors import ValidationError
 from .evaluation import EvaluationService
 
 
-APP_CONTRACT_VERSION = 4
+APP_CONTRACT_VERSION = 5
 RISK_LEVELS = ("none", "low", "medium", "high", "critical")
 
 
@@ -85,6 +85,7 @@ class AppService:
                 "llm_profiles": True,
                 "llm_evaluate": True,
                 "llm_review": True,
+                "audit_review": True,
                 "project_registry": True,
             },
         }
@@ -189,6 +190,11 @@ class AppService:
             "category_l2",
             "score",
             "review_status",
+            "format_issue_count",
+            "capability_hint_count",
+            "unreviewed_risk_count",
+            "confirmed_risk_count",
+            "false_positive_count",
             "tags",
             "license",
             "compatibility",
@@ -206,6 +212,11 @@ class AppService:
             "rel_path": skill["rel_path"],
             "valid": skill["valid"],
             "audit_severity": skill["audit_severity"],
+            "format_issue_count": skill["format_issue_count"],
+            "capability_hint_count": skill["capability_hint_count"],
+            "unreviewed_risk_count": skill["unreviewed_risk_count"],
+            "confirmed_risk_count": skill["confirmed_risk_count"],
+            "false_positive_count": skill["false_positive_count"],
             "score": skill["score"],
             "annotation_score": skill["annotation_score"],
             "reason": skill["reason"],

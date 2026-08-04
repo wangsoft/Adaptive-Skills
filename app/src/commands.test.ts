@@ -11,6 +11,7 @@ import {
   llmEvaluateArgs,
   llmProfileSaveArgs,
   llmReviewArgs,
+  auditReviewArgs,
 } from "./commands";
 
 describe("desktop command contract", () => {
@@ -86,5 +87,18 @@ describe("desktop command contract", () => {
     expect(compatible).toContain("https://llm.example.test/v1");
     expect(compatible).not.toContain("super-secret-key");
     expect(compatible).not.toContain("--api-key");
+  });
+
+  it("keeps audit review evidence and outcome in separate arguments", () => {
+    expect(auditReviewArgs(
+      "skill-id",
+      "finding-id",
+      "reviewed_false_positive",
+      "documentation example",
+    )).toEqual([
+      "skill", "audit-review", "skill-id", "finding-id",
+      "--status", "reviewed_false_positive",
+      "--note", "documentation example",
+    ]);
   });
 });

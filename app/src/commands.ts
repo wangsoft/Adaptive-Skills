@@ -23,6 +23,19 @@ export function sourceUpdatePolicyArgs(
   return ["source", "policy", sourceId, policy];
 }
 
+export function auditReviewArgs(
+  skillId: string,
+  findingId: string,
+  status: "reviewed_false_positive" | "confirmed_risk",
+  note?: string,
+): string[] {
+  return [
+    "skill", "audit-review", skillId, findingId,
+    "--status", status,
+    ...(note?.trim() ? ["--note", note.trim()] : []),
+  ];
+}
+
 export function llmConfigArgs(
   provider: "disabled" | "codex" | "claude",
   model: string,

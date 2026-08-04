@@ -76,6 +76,9 @@ import type {
   LLMProfileProvider,
   LLMAPIMode,
   ProjectSummary,
+  AuditFinding,
+  AuditReviewStatus,
+  ValidationFinding,
 } from "./types";
 
 type View = "overview" | "skills" | "sources" | "projects" | "evaluation";
@@ -176,6 +179,29 @@ function App() {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const reviewAuditFinding = async (
+    findingId: string,
+    status: Extract<AuditReviewStatus, "reviewed_false_positive" | "confirmed_risk">,
+  ) => {
+    if (!detail) return;
+    setBusy(`audit-review-${findingId}`);
+    setError(null);
+    try {
+      const updated = await api.reviewAuditFinding(
+        library,
+        detail.id,
+        findingId,
+        status,
+      );
+      setDetail(updated);
+      await loadSnapshot();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -359,7 +385,7 @@ function App() {
         )}
       </main>
 
-      {detail && <SkillDrawer skill={detail} onClose={() => setDetail(null)} />}
+      {detail && <SkillDrawer skill={detail} busy={Boolean(busy)} onReview={reviewAuditFinding} onClose={() => setDetail(null)} />}
       {busy && <ActivityToast label={busy} />}
     </div>
   );
@@ -525,7 +551,7 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
           <button className="skill-card" key={skill.id} onClick={() => onOpen(skill)} disabled={detailLoading}>
             <div className="skill-card-top">
               <div className="skill-icon"><BookOpen size={18} /></div>
-              <div className="skill-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span>{!skill.valid && <span className="badge warning">无效</span>}</div>
+              <div className="skill-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span>{(skill.format_issue_count ?? 0) > 0 && <span className="badge warning">格式 {skill.format_issue_count}</span>}{Boolean(skill.capability_hint_count) && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}</div>
             </div>
             <div><h3>{skill.name}</h3><p>{skill.description || "暂无描述"}</p></div>
             {skill.reason?.length ? <div className="reason-line"><Sparkles size={13} />匹配 {skill.reason.slice(0, 2).map((item) => item.field).join("、")}</div> : null}
@@ -1033,16 +1059,96 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   );
 }
 
-function SkillDrawer({ skill, onClose }: { skill: SkillDetail; onClose: () => void }) {
+function FindingRow({
+  finding,
+  tone,
+  busy,
+  onReview,
+}: {
+  finding: ValidationFinding | AuditFinding;
+  tone: "format" | "hint" | "risk" | "confirmed" | "excluded";
+  busy?: boolean;
+  onReview?: (
+    findingId: string,
+    status: "reviewed_false_positive" | "confirmed_risk",
+  ) => void;
+}) {
+  const audit = "finding_id" in finding ? finding : null;
+  return (
+    <div className={`finding finding-${tone}`}>
+      {tone === "hint" || tone === "excluded" ? <ShieldCheck size={15} /> : <AlertTriangle size={15} />}
+      <div>
+        <div className="finding-heading"><strong>{finding.rule}</strong><span>{finding.severity}</span></div>
+        <p>{finding.message}</p>
+        {audit?.content_summary && <code>{audit.content_summary}</code>}
+        <span>{finding.file}{finding.line ? `:${finding.line}` : ""}{audit ? ` · ${audit.context}` : ""}</span>
+        {audit?.review_stale && <small>源码摘要已变化，之前的审查结论已失效。</small>}
+        {audit?.review_note && <small>{audit.review_note}</small>}
+        {audit && onReview && (tone === "risk" || tone === "confirmed" || tone === "excluded") && (
+          <div className="finding-actions">
+            {tone !== "confirmed" && <button className="button compact warning" disabled={busy} onClick={() => onReview(audit.finding_id, "confirmed_risk")}>确认为风险</button>}
+            {tone !== "excluded" && <button className="button compact ghost" disabled={busy} onClick={() => onReview(audit.finding_id, "reviewed_false_positive")}>标记误报</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FindingSection({
+  title,
+  description,
+  findings,
+  tone,
+  empty,
+  busy,
+  onReview,
+}: {
+  title: string;
+  description: string;
+  findings: Array<ValidationFinding | AuditFinding>;
+  tone: "format" | "hint" | "risk" | "confirmed" | "excluded";
+  empty: string;
+  busy?: boolean;
+  onReview?: (
+    findingId: string,
+    status: "reviewed_false_positive" | "confirmed_risk",
+  ) => void;
+}) {
+  return (
+    <section className="drawer-section finding-section">
+      <div className="section-title-row"><div><h3>{title}</h3><p>{description}</p></div><span>{findings.length}</span></div>
+      {findings.length ? <div className="finding-list">{findings.map((finding, index) => <FindingRow key={`${finding.rule}-${finding.file}-${finding.line ?? index}`} finding={finding} tone={tone} busy={busy} onReview={onReview} />)}</div> : <div className="clean-callout"><ShieldCheck size={18} /><span>{empty}</span></div>}
+    </section>
+  );
+}
+
+function SkillDrawer({ skill, busy, onReview, onClose }: {
+  skill: SkillDetail;
+  busy: boolean;
+  onReview: (
+    findingId: string,
+    status: "reviewed_false_positive" | "confirmed_risk",
+  ) => void;
+  onClose: () => void;
+}) {
+  const capabilityHints = skill.audit.filter((finding) => finding.classification === "capability_hint");
+  const unconfirmedRisks = skill.audit.filter((finding) => finding.classification === "risk" && finding.status === "unreviewed");
+  const confirmedRisks = skill.audit.filter((finding) => finding.status === "confirmed_risk");
+  const excludedFindings = skill.audit.filter((finding) => finding.status === "reviewed_false_positive");
   return (
     <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
       <aside className="skill-drawer" role="dialog" aria-modal="true" aria-labelledby="skill-drawer-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header"><div><span className="eyebrow">{skill.source_name} / {skill.rel_path}</span><h2 id="skill-drawer-title">{skill.name}</h2></div><button className="icon-button" autoFocus aria-label="关闭 Skill 详情" onClick={onClose}><X size={18} /></button></div>
         <p className="drawer-description">{skill.description}</p>
-        <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.valid ? "badge success" : "badge warning"}>{skill.valid ? "规范有效" : "需要修复"}</span>{skill.score != null && <span className="badge neutral">人工评分 {skill.score}</span>}</div>
+        <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.validation.length ? "badge warning" : "badge success"}>{skill.validation.length ? `${skill.valid ? "格式提示" : "格式不兼容"} ${skill.validation.length}` : "格式兼容"}</span>{(skill.capability_hint_count ?? 0) > 0 && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}{skill.score != null && <span className="badge neutral">人工评分 {skill.score}</span>}</div>
         <div className="detail-grid"><div><span>一级分类</span><strong>{skill.category_l1 || "未分类"}</strong></div><div><span>二级分类</span><strong>{skill.category_l2 || "未分类"}</strong></div><div><span>许可证</span><strong>{skill.license || "未声明"}</strong></div><div><span>来源提交</span><strong>{shortSha(skill.head_sha)}</strong></div></div>
         {(skill.problem || skill.use_case) && <section className="drawer-section"><h3>人工整理</h3>{skill.problem && <div className="insight-block"><span>解决的问题</span><p>{skill.problem}</p></div>}{skill.use_case && <div className="insight-block"><span>应用场景</span><p>{skill.use_case}</p></div>}</section>}
-        <section className="drawer-section"><h3>验证与风险</h3>{!skill.validation.length && !skill.audit.length ? <div className="clean-callout"><ShieldCheck size={18} /><span>未发现规范错误或高信号静态风险。</span></div> : <div className="finding-list">{[...skill.validation, ...skill.audit].map((finding, index) => <div className="finding" key={`${finding.rule}-${index}`}><AlertTriangle size={15} /><div><strong>{finding.rule}</strong><p>{finding.message}</p><span>{finding.file}{finding.line ? `:${finding.line}` : ""}</span></div></div>)}</div>}</section>
+        <FindingSection title="格式兼容性" description="只判断 SKILL.md 与 frontmatter 是否符合加载规范，不参与安全风险等级。" findings={skill.validation} tone="format" empty="格式兼容，未发现阻止加载的问题。" />
+        <FindingSection title="能力提示" description="来自文档描述或禁止名单，说明 Skill 涉及的能力，不作为真实风险。" findings={capabilityHints} tone="hint" empty="没有额外的敏感能力提示。" />
+        <FindingSection title="未确认风险" description="实际命令或文件行为命中的保守规则；在审查前参与整体风险等级。" findings={unconfirmedRisks} tone="risk" empty="没有等待人工确认的真实风险。" busy={busy} onReview={onReview} />
+        <FindingSection title="确认风险" description="人工确认是真实行为的风险，继续参与整体风险等级和项目门禁。" findings={confirmedRisks} tone="confirmed" empty="没有已确认风险。" busy={busy} onReview={onReview} />
+        {excludedFindings.length > 0 && <FindingSection title="已排除误报" description="审查结论绑定当前源码摘要；源码变化后会自动回到未确认风险。" findings={excludedFindings} tone="excluded" empty="没有已排除误报。" busy={busy} onReview={onReview} />}
         <section className="drawer-section"><div className="section-title-row"><h3>SKILL.md</h3><span>{skill.skill_md_path}</span></div><pre className="skill-content">{skill.body || "（正文为空）"}</pre></section>
       </aside>
     </div>
@@ -1051,7 +1157,7 @@ function SkillDrawer({ skill, onClose }: { skill: SkillDetail; onClose: () => vo
 
 function ActivityToast({ label }: { label: string }) {
   const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
-  const message = messages[label] || (label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
+  const message = messages[label] || (label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
   return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
 }
 

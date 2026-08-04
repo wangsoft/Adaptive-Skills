@@ -67,6 +67,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 project_table = migrated_database.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='managed_projects'"
                 ).fetchone()
+                audit_review_table = migrated_database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_reviews'"
+                ).fetchone()
                 evaluation_columns = {
                     row[1]
                     for row in migrated_database.execute(
@@ -76,6 +79,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIn("content_hash", annotation_columns)
             self.assertIsNotNone(evaluation_table)
             self.assertIsNotNone(project_table)
+            self.assertIsNotNone(audit_review_table)
             self.assertIn("profile_id", evaluation_columns)
 
 

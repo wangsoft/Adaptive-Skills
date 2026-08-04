@@ -1,5 +1,28 @@
 export type RiskLevel = "none" | "low" | "medium" | "high" | "critical";
 export type SourceUpdatePolicy = "remote" | "local";
+export type AuditContext = "command_invocation" | "documentation" | "denylist" | "artifact";
+export type AuditReviewStatus = "unreviewed" | "reviewed_false_positive" | "confirmed_risk" | "informational";
+
+export interface ValidationFinding {
+  severity: string;
+  rule: string;
+  message: string;
+  file: string;
+  line?: number;
+}
+
+export interface AuditFinding extends ValidationFinding {
+  context: AuditContext;
+  classification: "risk" | "capability_hint";
+  finding_id: string;
+  content_digest: string;
+  content_summary: string;
+  status: AuditReviewStatus;
+  review_stale: boolean;
+  review_note?: string | null;
+  reviewed_at?: string | null;
+  review_content_summary?: string | null;
+}
 
 export interface AppSummary {
   source_count: number;
@@ -155,6 +178,11 @@ export interface SkillSummary {
   rel_path: string;
   valid: boolean;
   audit_severity: RiskLevel;
+  format_issue_count?: number;
+  capability_hint_count?: number;
+  unreviewed_risk_count?: number;
+  confirmed_risk_count?: number;
+  false_positive_count?: number;
   category_l1?: string | null;
   category_l2?: string | null;
   score?: number | null;
@@ -175,8 +203,8 @@ export interface SkillDetail extends SkillSummary {
   problem: string | null;
   use_case: string | null;
   notes: string | null;
-  validation: Array<{ severity: string; rule: string; message: string; file: string; line?: number }>;
-  audit: Array<{ severity: string; rule: string; message: string; file: string; line?: number }>;
+  validation: ValidationFinding[];
+  audit: AuditFinding[];
   metadata: Record<string, unknown>;
   content_hash: string;
   tree_hash: string;
