@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { canSelectSkill, selectedRiskCount } from "./domain";
+import {
+  canSelectSkill,
+  projectEntryCanSync,
+  projectEntryRequiresForce,
+  projectEntryStateLabel,
+  selectedRiskCount,
+} from "./domain";
 import type { SkillSummary } from "./types";
 
 const skill = (overrides: Partial<SkillSummary> = {}): SkillSummary => ({
@@ -31,5 +37,14 @@ describe("project skill safety", () => {
       skill({ id: "skill-3", audit_severity: "critical" }),
     ];
     expect(selectedRiskCount(skills, new Set(["skill-1", "skill-3"]))).toBe(1);
+  });
+
+  it("distinguishes recoverable drift from entries missing in the catalog", () => {
+    expect(projectEntryCanSync("source-drift")).toBe(true);
+    expect(projectEntryCanSync("catalog-missing")).toBe(false);
+    expect(projectEntryRequiresForce("project-drift")).toBe(true);
+    expect(projectEntryRequiresForce("replaced")).toBe(true);
+    expect(projectEntryRequiresForce("missing")).toBe(false);
+    expect(projectEntryStateLabel("broken")).toBe("链接已损坏");
   });
 });

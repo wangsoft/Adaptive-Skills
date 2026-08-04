@@ -1,4 +1,4 @@
-import type { RiskLevel, SkillSummary } from "./types";
+import type { ProjectEntryStatus, RiskLevel, SkillSummary } from "./types";
 
 export const ELEVATED_RISKS = new Set<RiskLevel>(["high", "critical"]);
 
@@ -43,4 +43,24 @@ export function riskLabel(risk: RiskLevel): string {
     high: "高风险",
     critical: "严重风险",
   }[risk];
+}
+
+export function projectEntryStateLabel(state: ProjectEntryStatus["state"]): string {
+  return {
+    clean: "已同步",
+    missing: "链接缺失",
+    "catalog-missing": "目录中已不存在",
+    replaced: "被其他内容替换",
+    broken: "链接已损坏",
+    "source-drift": "来源有更新",
+    "project-drift": "项目副本有改动",
+  }[state];
+}
+
+export function projectEntryRequiresForce(state: ProjectEntryStatus["state"]): boolean {
+  return state === "project-drift" || state === "replaced";
+}
+
+export function projectEntryCanSync(state: ProjectEntryStatus["state"]): boolean {
+  return state !== "clean" && state !== "catalog-missing";
 }

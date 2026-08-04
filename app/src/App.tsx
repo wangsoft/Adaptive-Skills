@@ -33,6 +33,9 @@ import {
   canSelectSkill,
   formatDate,
   isElevatedRisk,
+  projectEntryCanSync,
+  projectEntryRequiresForce,
+  projectEntryStateLabel,
   riskLabel,
   selectedRiskCount,
   shortSha,
@@ -57,6 +60,7 @@ import {
 import type { ProjectDraft } from "./drafts";
 import type {
   AppSnapshot,
+  ProjectEntryStatus,
   ProjectPlan,
   ProjectHistoryEvent,
   ProjectStatus,
@@ -893,6 +897,22 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   });
   const sync = (force = false) => run("sync", async () => { await api.projectSync(library, project, allowRisk, force); await loadProjectContext(project); await loadProjects(); });
   const unlinkEntry = (skillId: string, force = false) => run("unlink", async () => { await api.projectUnlink(library, project, [skillId], force); await loadProjectContext(project); await loadProjects(); });
+  const requestSync = () => {
+    if (!status) return;
+    const forceCount = status.entries.filter((entry) => projectEntryRequiresForce(entry.state)).length;
+    if (forceCount && !window.confirm(
+      `检测到 ${forceCount} 个项目内已修改或被替换的条目。强制同步会用目录中的 Skill 覆盖这些项目内容，且无法由 Adaptive Skills 恢复。确认继续？`,
+    )) return;
+    void sync(forceCount > 0);
+  };
+  const requestUnlinkEntry = (entry: ProjectEntryStatus) => {
+    const force = projectEntryRequiresForce(entry.state);
+    const message = force
+      ? `“${entry.name || entry.skill_id}”在项目内已有改动或被其他内容替换。强制移除会删除当前路径及其中改动，且无法由 Adaptive Skills 恢复。确认继续？`
+      : `从项目中移除“${entry.name || entry.skill_id}”的受管链接？Skill 来源不会被删除。`;
+    if (!window.confirm(message)) return;
+    void unlinkEntry(entry.skill_id, force);
+  };
   const clearDraft = () => {
     clearProjectDraft(localStorage, library);
     setProject(EMPTY_PROJECT_DRAFT.project);
@@ -955,8 +975,9 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
         {status && status.entries.length > 0 && (
           <section className="panel project-status-panel">
             <div className="panel-heading"><div><span className="eyebrow">Managed manifest</span><h3>已挂载 Skills</h3></div><span className={status.clean ? "badge success" : "badge warning"}>{status.clean ? "全部同步" : "检测到漂移"}</span></div>
-            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}</span></div><span className="entry-state">{entry.state}</span><button title="移除链接" disabled={Boolean(busy)} onClick={() => void unlinkEntry(entry.skill_id)}><Unlink size={15} /></button></div>)}</div>
-            {!status.clean && <button className="button secondary wide" disabled={Boolean(busy)} onClick={() => void sync()}><RefreshCw size={16} />同步来源变更</button>}
+            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}</span></div><span className="entry-state">{projectEntryStateLabel(entry.state)}</span><button aria-label={`移除 ${entry.name || entry.skill_id}`} title={projectEntryRequiresForce(entry.state) ? "强制移除项目内已改动的条目" : "移除受管链接"} disabled={Boolean(busy)} onClick={() => requestUnlinkEntry(entry)}><Unlink size={15} /></button></div>)}</div>
+            {status.entries.some((entry) => entry.state === "catalog-missing") && <div className="project-drift-warning"><AlertTriangle size={16} /><span>有条目已不在 Skills 目录中，无法同步。确认项目内容后，请先用右侧按钮从 manifest 移除。</span></div>}
+            {status.entries.some((entry) => projectEntryCanSync(entry.state)) && <button className={`button wide ${status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "warning" : "secondary"}`} disabled={Boolean(busy)} onClick={requestSync}><RefreshCw size={16} />{status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "确认并覆盖项目漂移" : "同步来源变更"}</button>}
           </section>
         )}
 
