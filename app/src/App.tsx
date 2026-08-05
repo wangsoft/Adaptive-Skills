@@ -1010,7 +1010,10 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
 
       <section className="project-results">
         {!plan ? (
-          <div className="project-placeholder"><div className="placeholder-graphic"><Search size={27} /></div><h3>从需求开始</h3><p>系统会结合 Excel 分类、人工评分、Skill 描述和风险规则，解释每个推荐。</p><div className="flow-hint"><span>需求</span><ArrowRight size={14} /><span>推荐</span><ArrowRight size={14} /><span>确认</span><ArrowRight size={14} /><span>软链接</span></div></div>
+          <div className="project-placeholder recommendation-placeholder">
+            <div className="recommendation-placeholder-heading"><div className="recommendation-placeholder-icon"><Sparkles size={18} /></div><div><h3>推荐结果将在这里显示</h3><p>填写项目目录和能力需求后，点击“生成推荐方案”。系统会从本地 Skill 目录中匹配并解释推荐结果。</p></div></div>
+            <div className="recommendation-preview" aria-label="推荐结果包含的信息"><span><Search size={13} />匹配理由</span><span><CircleGauge size={13} />质量评分</span><span><ShieldCheck size={13} />风险提示</span></div>
+          </div>
         ) : (
           <div className="stack gap-md">
             <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>推荐 {plan.recommendations.length} 个 Skills</h2></div><span className="selection-count">已选择 {selected.size}</span></div>
