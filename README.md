@@ -314,7 +314,7 @@ adaptive-skills --library /Users/leowang/skills inventory export \
 ## MVP 限制
 
 - frontmatter 使用保守的无依赖解析器，支持常用标量、行折叠和行内列表，不是完整 YAML。
-- 项目需求检索仍是确定性的词法排序加人工评分；可选 LLM 只负责 Skill 分类和质量评测，
+- 项目需求检索仍是确定性的词法排序加智能评分；可选 LLM 只负责 Skill 分类和质量评测，
   暂不参与项目需求匹配，也不包含向量数据库。
 - 桌面 App 当前是开发构建；尚未把 Python 运行时封装为可移植 sidecar，也未签名或公证。
 - 暂无 TUI、MCP 服务、自动更新调度和远程团队目录。
