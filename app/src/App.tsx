@@ -1146,13 +1146,21 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
     await loadProjectContext(item.path, true);
   };
 
-  const importProject = async () => {
-    const selectedPath = await open({ directory: true, multiple: false, title: "导入已有 Adaptive Skills 项目" });
+  const addProject = async () => {
+    const selectedPath = await open({ directory: true, multiple: false, title: "选择需要使用 Skills 的代码项目" });
     if (typeof selectedPath !== "string") return;
-    await run("project-register", async () => {
-      const registered = await api.projectRegister(library, selectedPath);
-      await loadProjects();
-      await openManagedProject(registered);
+    if (project && project !== selectedPath && !window.confirm("选择其他项目会替换当前项目草稿，是否继续？")) return;
+    await run("project-add", async () => {
+      const selectedStatus = await api.projectStatus(library, selectedPath);
+      setPlan(null); setSelected(new Set()); setRiskConfirmed(false);
+      if (selectedStatus.managed) {
+        const registered = await api.projectRegister(library, selectedPath);
+        await loadProjects();
+        await openManagedProject(registered);
+        return;
+      }
+      setProject(selectedPath); setRequirement(""); setTarget("auto"); setAllowRisk(false);
+      setStatus(selectedStatus); setHistory([]); setScreen("detail");
     });
   };
 
@@ -1228,8 +1236,8 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   if (screen === "list") {
     return <div className="stack gap-lg project-index">
       <section className="panel project-index-hero">
-        <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>这里是管理过的项目入口。每个项目自己的 manifest 仍是历史和软链接状态的权威来源。</p></div>
-        <div className="button-row"><button className="button secondary" disabled={Boolean(busy)} onClick={() => void importProject()}><FolderOpen size={16} />导入已有项目</button><button className="button primary" onClick={() => { if (project && !window.confirm("开始新配置会清空当前草稿，是否继续？")) return; clearDraft(); setScreen("detail"); }}><Plus size={16} />新建项目配置</button></div>
+        <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>选择需要使用 Skills 的代码项目，而不是 Skills 仓库目录。系统会自动识别新项目或恢复已有 manifest 的项目。</p></div>
+        <button className="button primary" disabled={Boolean(busy)} onClick={() => void addProject()}>{busy === "project-add" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}添加项目</button>
       </section>
       {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
       <section className="project-index-grid">
@@ -1240,7 +1248,7 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
         </article>)}
       </section>
       {projectsLoading && <div className="history-empty"><LoaderCircle className="spin" size={18} /><span>正在读取项目列表…</span></div>}
-      {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有管理过的项目</h3><p>新建项目配置并首次应用 Skill 后会自动出现在这里；也可以导入已有 manifest 的项目。</p></div>}
+      {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有管理过的项目</h3><p>添加普通代码项目后可为它选择 Skills；若目录已有 manifest，会自动恢复历史和软链接状态。</p></div>}
     </div>;
   }
 
@@ -1249,6 +1257,7 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
       <section className="panel project-builder">
         <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> 项目与需求</div><button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button></div>
         <h2>按项目选择 Skills</h2><p className="muted">先生成可解释方案；只有被勾选的 Skill 才会创建软链接。</p>
+        {status && !status.managed && <div className="project-setup-notice"><Sparkles size={16} /><span>这是尚未接入 Adaptive Skills 的普通项目。首次应用 Skill 后会创建 manifest，并加入项目历史列表。</span></div>}
         <label className="input-field"><span>项目目录</span><div className="input-with-button"><input value={project} onChange={(event) => setProject(event.target.value)} placeholder="/path/to/project" /><button type="button" onClick={chooseProject}><FolderOpen size={17} /></button></div></label>
         <label className="input-field"><span>项目需要什么能力？</span><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} rows={5} placeholder="例如：根据技术方案制作结构清晰的中文演示文稿，并检查视觉一致性。" /></label>
         <div className="two-columns"><label className="input-field"><span>目标 Agent</span><select value={target} onChange={(event) => setTarget(event.target.value as ProjectDraft["target"])}><option value="auto">通用 .agents/skills</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label><label className="risk-toggle"><input type="checkbox" checked={allowRisk} onChange={(event) => { setAllowRisk(event.target.checked); setPlan(null); setSelected(new Set()); }} /><span><ShieldAlert size={17} /><strong>显示高风险结果</strong><small>应用前仍需二次确认</small></span></label></div>

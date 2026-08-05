@@ -485,11 +485,13 @@ class ProjectManager:
         root = _safe_project(project)
         manifest = self.load_manifest(root)
         entries = [self._entry_status(root, entry) for entry in manifest["entries"]]
-        if self.manifest_path(root).is_file():
+        managed = self.manifest_path(root).is_file()
+        if managed:
             self._register_manifest(root, manifest)
         return {
             "project": str(root),
             "manifest": str(self.manifest_path(root)),
+            "managed": managed,
             "entries": entries,
             "clean": all(entry["state"] == "clean" for entry in entries),
         }

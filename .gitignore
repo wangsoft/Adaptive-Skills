@@ -12,6 +12,9 @@ build/
 .DS_Store
 node_modules/
 app/src-tauri/target/
+app/src-tauri/binaries/
+app/src-tauri/resources/adaptive-skills-core/*
+!app/src-tauri/resources/adaptive-skills-core/.gitkeep
 app/src-tauri/gen/
 app/.playwright-cli/
 app/src-tauri/icons/android/

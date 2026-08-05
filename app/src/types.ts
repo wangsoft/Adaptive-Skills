@@ -344,6 +344,7 @@ export interface ProjectEntryStatus {
 export interface ProjectStatus {
   project: string;
   manifest: string;
+  managed: boolean;
   entries: ProjectEntryStatus[];
   clean: boolean;
 }

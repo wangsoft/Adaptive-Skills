@@ -229,10 +229,19 @@ npm install
 npm run tauri -- dev
 ```
 
-桌面桥默认使用仓库根目录的 `.venv/bin/python`。需要指定其他解释器时：
+开发模式默认使用仓库根目录的 `.venv/bin/python`。需要指定其他解释器时：
 
 ```bash
 ADAPTIVE_SKILLS_PYTHON=/absolute/path/to/python npm run tauri -- dev
+```
+
+发布构建会先用 PyInstaller 生成独立的 Python 核心目录，再由 Tauri 把完整运行时放入 App 资源。
+安装 DMG 的用户不需要另装 Python、项目源码或 `.venv`：
+
+```bash
+uv pip install --python .venv/bin/python -e '.[desktop]'
+cd app
+npm run tauri -- build
 ```
 
 前端与 Rust 桥接验证：
@@ -245,7 +254,7 @@ cd ..
 cargo test --manifest-path app/src-tauri/Cargo.toml
 ```
 
-App 的 Rust 层以参数数组启动 Python，不经过 Shell。高风险或严重风险 Skill 默认不会进入
+App 的 Rust 层以参数数组启动内置核心，不经过 Shell；只有开发模式才调用项目 Python。高风险或严重风险 Skill 默认不会进入
 项目推荐；启用风险结果后，应用界面还会要求二次确认。所有实际文件变更仍由
 `ProjectManager` 的目录边界、冲突检测和 manifest 规则控制。
 
@@ -343,10 +352,11 @@ adaptive-skills --library /Users/leowang/skills inventory export \
 
 ## MVP 限制
 
-- frontmatter 使用保守的无依赖解析器，支持常用标量、行折叠和行内列表，不是完整 YAML。
+- frontmatter 使用安全配置的 PyYAML 解析，支持嵌套 YAML，并限制递归别名和复杂度。
 - 项目需求检索仍是确定性的词法排序加智能评分；可选 LLM 只负责 Skill 分类和质量评测，
   暂不参与项目需求匹配，也不包含向量数据库。
-- 桌面 App 当前是开发构建；尚未把 Python 运行时封装为可移植 sidecar，也未签名或公证。
+- macOS 桌面包已包含独立 Python 核心运行时；当前产物仍未使用 Apple Developer ID 签名或公证。
+- 当前发布包只构建 Apple Silicon；Intel Mac、Windows 和 Linux 需要在对应平台原生构建 sidecar。
 - 暂无 TUI、MCP 服务、自动更新调度和远程团队目录。
 - 来源更新面向普通分支；复杂 tag/SHA pin 和依赖锁定留待后续版本。
 - Windows 的软链接权限不足时使用 `--mode auto` 回退为复制，尚未在 Windows CI 验证。

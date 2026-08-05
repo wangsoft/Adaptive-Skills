@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Adaptive Skills",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.adaptive-skills.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:bundle",
     "frontendDist": "../dist"
   },
   "app": {
@@ -29,7 +29,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "resources/adaptive-skills-core/": "adaptive-skills-core/"
+    },
     "category": "DeveloperTool",
-    "shortDescription": "Curate and link project-scoped Agent Skills"
+    "shortDescription": "Curate and link project-scoped Agent Skills",
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

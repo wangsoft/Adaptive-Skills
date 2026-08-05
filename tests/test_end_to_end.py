@@ -226,7 +226,9 @@ class EndToEndTests(unittest.TestCase):
         project.mkdir()
         manager = ProjectManager(self.settings)
 
+        self.assertFalse(manager.status(project)["managed"])
         manager.apply(project, [self.presentation["id"]])
+        self.assertTrue(manager.status(project)["managed"])
         projects = manager.list_projects()
 
         self.assertEqual(len(projects), 1)
