@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
@@ -79,9 +79,14 @@ import type {
   AuditFinding,
   AuditReviewStatus,
   ValidationFinding,
+  BootstrapCandidate,
+  BootstrapDiscovery,
+  BootstrapImportResult,
+  BootstrapInstallResult,
+  BootstrapStatus,
 } from "./types";
 
-type View = "overview" | "skills" | "sources" | "projects" | "evaluation";
+type View = "overview" | "bootstrap" | "skills" | "sources" | "projects" | "evaluation";
 
 const DEFAULT_LIBRARY = "~/skills";
 const LAST_VIEW_KEY = "adaptive-skills:last-view";
@@ -93,6 +98,7 @@ const NAV_ITEMS: Array<{
   icon: typeof CircleGauge;
 }> = [
   { id: "overview", label: "概览", description: "目录健康与风险", icon: CircleGauge },
+  { id: "bootstrap", label: "初始化", description: "发现与归集 Skills", icon: Search },
   { id: "skills", label: "Skills", description: "筛选与审查", icon: Layers3 },
   { id: "sources", label: "来源", description: "Git 仓库生命周期", icon: FolderGit2 },
   { id: "evaluation", label: "LLM 评测", description: "分类、评分与审核", icon: Sparkles },
@@ -132,6 +138,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const didAutoOpenBootstrap = useRef(false);
 
   const loadSnapshot = useCallback(
     async (query?: string) => {
@@ -140,6 +147,10 @@ function App() {
       try {
         const value = await api.snapshot(library, query);
         setSnapshot(value);
+        if (!didAutoOpenBootstrap.current && value.summary.source_count === 0) {
+          didAutoOpenBootstrap.current = true;
+          setView("bootstrap");
+        }
         if (value.library.path !== library) setLibrary(value.library.path);
         localStorage.setItem("adaptive-skills-library", value.library.path);
       } catch (reason) {
@@ -315,6 +326,15 @@ function App() {
         ) : snapshot ? (
           <div className="view-container">
             {view === "overview" && <Overview snapshot={snapshot} onNavigate={navigate} />}
+            {view === "bootstrap" && (
+              <BootstrapView
+                key={library}
+                library={library}
+                status={snapshot.bootstrap}
+                onRefresh={loadSnapshot}
+                onError={setError}
+              />
+            )}
             {view === "skills" && (
               <SkillsView
                 key={library}
@@ -411,6 +431,233 @@ function EmptyConnection({ library, onChoose, onRetry }: { library: string; onCh
         <button className="button secondary" onClick={onChoose}><FolderOpen size={16} />选择目录</button>
         <button className="button primary" onClick={onRetry}><RefreshCw size={16} />重新连接</button>
       </div>
+    </div>
+  );
+}
+
+const BOOTSTRAP_KIND_LABEL: Record<BootstrapCandidate["kind"], string> = {
+  local: "本地",
+  git: "Git 工作区",
+  symlink: "软链接",
+  system: "系统内置",
+  managed: "已管理",
+};
+
+function BootstrapView({ library, status, onRefresh, onError }: {
+  library: string;
+  status: BootstrapStatus;
+  onRefresh: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const defaultRoots = status.default_roots.filter((root) => root.exists).map((root) => root.path);
+  const [extraRoots, setExtraRoots] = useState<string[]>([]);
+  const [discovery, setDiscovery] = useState<BootstrapDiscovery | null>(null);
+  const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
+  const [selectedStarters, setSelectedStarters] = useState<Set<string>>(new Set());
+  const [working, setWorking] = useState<"discover" | "import" | "install" | null>(null);
+  const [importResult, setImportResult] = useState<BootstrapImportResult | null>(null);
+  const [installResult, setInstallResult] = useState<BootstrapInstallResult | null>(null);
+
+  const scanRoots = async (customRoots = extraRoots, preserveImportResult = false) => {
+    setWorking("discover");
+    if (!preserveImportResult) setImportResult(null);
+    onError(null);
+    try {
+      const roots = customRoots.length ? Array.from(new Set([...defaultRoots, ...customRoots])) : [];
+      const result = await api.bootstrapDiscover(library, roots);
+      setDiscovery(result);
+      setSelectedCandidates(new Set(
+        result.candidates.filter((candidate) => candidate.importable).map((candidate) => candidate.id),
+      ));
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const chooseScanRoots = async () => {
+    const selected = await open({ directory: true, multiple: true, title: "选择要扫描的 Skill 目录" });
+    const paths = typeof selected === "string" ? [selected] : selected || [];
+    if (!paths.length) return;
+    const next = Array.from(new Set([...extraRoots, ...paths]));
+    setExtraRoots(next);
+    await scanRoots(next);
+  };
+
+  const toggleCandidate = (id: string) => {
+    setSelectedCandidates((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const importSelected = async () => {
+    if (!discovery || !selectedCandidates.size) return;
+    const candidates = discovery.candidates.filter((candidate) => selectedCandidates.has(candidate.id));
+    setWorking("import");
+    onError(null);
+    try {
+      const result = await api.bootstrapImport(library, candidates);
+      setImportResult(result);
+      await onRefresh();
+      await scanRoots(extraRoots, true);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const toggleStarter = (id: string) => {
+    setSelectedStarters((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const installSelected = async () => {
+    if (!selectedStarters.size) return;
+    const accepted = window.confirm(
+      `将从 GitHub 克隆 ${selectedStarters.size} 个第三方仓库到 ${library}，随后只做静态扫描，不会执行其中的 Skill。是否继续？`,
+    );
+    if (!accepted) return;
+    setWorking("install");
+    setInstallResult(null);
+    onError(null);
+    try {
+      const result = await api.bootstrapInstall(library, Array.from(selectedStarters));
+      setInstallResult(result);
+      setSelectedStarters(new Set());
+      await onRefresh();
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const importableIds = discovery?.candidates.filter((candidate) => candidate.importable).map((candidate) => candidate.id) || [];
+  const allImportableSelected = Boolean(importableIds.length) && importableIds.every((id) => selectedCandidates.has(id));
+
+  return (
+    <div className="bootstrap-page stack gap-lg">
+      <section className="panel bootstrap-hero">
+        <div>
+          <div className="eyebrow"><Layers3 size={14} /> First-run repository builder</div>
+          <h2>快速构建你的本地 Skills 仓库</h2>
+          <p>扫描常用 Agent 目录，预览并复制归集可迁移的 Skills；原目录不会被移动、删除或改写。</p>
+          <div className="bootstrap-steps" aria-label="初始化流程">
+            <span>1 扫描目录</span><ChevronRight size={14} /><span>2 审核候选</span><ChevronRight size={14} /><span>3 复制或 Clone</span><ChevronRight size={14} /><span>4 静态扫描</span>
+          </div>
+        </div>
+        <div className="bootstrap-hero-actions">
+          <button className="button primary" disabled={Boolean(working)} onClick={() => void scanRoots()}>
+            {working === "discover" ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />}
+            扫描常用目录
+          </button>
+          <button className="button secondary" disabled={Boolean(working)} onClick={() => void chooseScanRoots()}>
+            <FolderOpen size={16} />添加扫描目录
+          </button>
+        </div>
+      </section>
+
+      <section className="panel bootstrap-roots">
+        <div className="panel-heading">
+          <div><span className="eyebrow">Discovery scope</span><h3>扫描范围</h3></div>
+          <span className="badge neutral">只读发现</span>
+        </div>
+        <div className="bootstrap-root-list">
+          {status.default_roots.map((root) => (
+            <div className={`bootstrap-root ${root.exists ? "available" : "missing"}`} key={root.id}>
+              <FolderOpen size={15} /><div><strong>{root.label}</strong><span>{root.path}</span></div>
+              <span className={`badge ${root.exists ? "success" : "neutral"}`}>{root.exists ? "可扫描" : "不存在"}</span>
+            </div>
+          ))}
+          {extraRoots.map((path) => (
+            <div className="bootstrap-root available" key={path}>
+              <Plus size={15} /><div><strong>自定义目录</strong><span>{path}</span></div><span className="badge success">已加入</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {discovery && (
+        <section className="panel bootstrap-discovery">
+          <div className="panel-heading">
+            <div><span className="eyebrow">Local candidates</span><h3>本地候选</h3><p>发现 {discovery.candidate_count} 个，{discovery.importable_count} 个可复制归集。</p></div>
+            <div className="button-row">
+              <button className="text-button" disabled={!importableIds.length} onClick={() => setSelectedCandidates(new Set(allImportableSelected ? [] : importableIds))}>{allImportableSelected ? "取消全选" : "选择全部可导入"}</button>
+              <button className="button primary compact" disabled={Boolean(working) || !selectedCandidates.size} onClick={() => void importSelected()}>
+                {working === "import" ? <LoaderCircle className="spin" size={15} /> : <Layers3 size={15} />}
+                复制归集 {selectedCandidates.size}
+              </button>
+            </div>
+          </div>
+          {discovery.roots.some((root) => root.error) && (
+            <div className="bootstrap-notice warning"><AlertTriangle size={16} /><span>{discovery.roots.filter((root) => root.error).map((root) => `${root.path}：${root.error}`).join("；")}</span></div>
+          )}
+          <div className="bootstrap-candidate-list">
+            {discovery.candidates.map((candidate) => (
+              <label className={`bootstrap-candidate ${candidate.importable ? "" : "disabled"}`} key={candidate.id}>
+                <input type="checkbox" checked={selectedCandidates.has(candidate.id)} disabled={!candidate.importable || Boolean(working)} onChange={() => toggleCandidate(candidate.id)} />
+                <div><strong>{candidate.name}</strong><p>{candidate.description || candidate.path}</p><small title={candidate.path}>{candidate.path} · {candidate.file_count} 个文件</small></div>
+                <span className="badge neutral">{BOOTSTRAP_KIND_LABEL[candidate.kind]}</span>
+                <span className={candidate.importable ? "bootstrap-reason ready" : "bootstrap-reason"}>{candidate.reason}</span>
+              </label>
+            ))}
+            {!discovery.candidates.length && <div className="empty-inline"><Search size={22} /><strong>没有发现 SKILL.md</strong><span>可以添加其他目录后重新扫描。</span></div>}
+          </div>
+          {importResult && (
+            <div className={`bootstrap-notice ${importResult.failed ? "warning" : "success"}`} role="status">
+              {importResult.failed ? <AlertTriangle size={16} /> : <Check size={16} />}
+              <span>复制完成：{importResult.imported} 个已导入，{importResult.skipped} 个重复跳过，{importResult.failed} 个失败。原目录保持不变。</span>
+            </div>
+          )}
+          {importResult?.failed ? (
+            <div className="bootstrap-result-details">
+              {importResult.results.filter((item) => item.status === "failed").map((item) => (
+                <p key={item.path}><strong>{item.path}</strong><span>{item.error || "复制失败"}</span></p>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      )}
+
+      <section className="panel bootstrap-starters">
+        <div className="panel-heading">
+          <div><span className="eyebrow">Curated Git sources</span><h3>可选的起步仓库</h3><p>仅在你确认后联网 Clone，随后进入同一套 SQLite 目录和安全扫描。</p></div>
+          <button className="button secondary compact" disabled={Boolean(working) || !selectedStarters.size} onClick={() => void installSelected()}>
+            {working === "install" ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}
+            安装 {selectedStarters.size || "所选"}
+          </button>
+        </div>
+        <div className="bootstrap-notice"><ShieldCheck size={16} /><span>第三方内容按不可信输入处理。部分仓库采用混合许可，使用前仍需查看各目录的许可证。</span></div>
+        <div className="bootstrap-starter-list">
+          {status.starters.map((starter) => (
+            <label className={`bootstrap-starter ${starter.installed ? "installed" : ""}`} key={starter.id}>
+              <input type="checkbox" checked={selectedStarters.has(starter.id)} disabled={starter.installed || Boolean(working)} onChange={() => toggleStarter(starter.id)} />
+              <div><strong>{starter.title}</strong><p>{starter.description}</p><small>{starter.maintainer} · {starter.license} · {starter.url}</small></div>
+              <span className={`badge ${starter.installed ? "success" : "neutral"}`}>{starter.installed ? "已安装" : "可选"}</span>
+            </label>
+          ))}
+        </div>
+        {installResult && (
+          <div className={`bootstrap-notice ${installResult.failed ? "warning" : "success"}`} role="status">
+            {installResult.failed ? <AlertTriangle size={16} /> : <Check size={16} />}
+            <span>Git 来源处理完成：{installResult.installed} 个已安装，{installResult.already_installed} 个已存在，{installResult.failed} 个失败。</span>
+          </div>
+        )}
+        {installResult?.failed ? (
+          <div className="bootstrap-result-details">
+            {installResult.results.filter((item) => item.status === "failed").map((item) => (
+              <p key={item.id}><strong>{status.starters.find((starter) => starter.id === item.id)?.title || item.id}</strong><span>{item.error || "安装失败"}</span></p>
+            ))}
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }
@@ -619,7 +866,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   return (
     <div className="stack gap-lg">
       <div className="section-toolbar">
-        <div><h2>{sources.length} 个 Git 来源</h2><p>远程跟随只接受 fast-forward；本地维护会保留工作区并仅扫描。</p></div>
+        <div><h2>{sources.length} 个来源</h2><p>远程 Git 只接受 fast-forward；本地归集来源仅重新扫描。</p></div>
         <div className="button-row">
           <button className="button secondary" disabled={Boolean(busy) || !sources.length} onClick={() => void refreshAll()}>
             {busy === "refresh-all" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
@@ -662,15 +909,15 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
       <section className="source-grid">
         {sources.map((source) => (
           <article className="source-card" key={source.id}>
-            <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地 Git 仓库"}</p></div><div className="source-badges"><span className="badge neutral">{source.update_policy === "local" ? "本地维护" : "远程跟随"}</span><span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? "需检查" : "健康"}</span></div></div>
+            <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地归集目录"}</p></div><div className="source-badges"><span className="badge neutral">{source.url ? (source.update_policy === "local" ? "本地维护" : "远程跟随") : "本地归集"}</span><span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? "需检查" : "健康"}</span></div></div>
             <div className="source-stat-row"><div><span>Skills</span><strong>{source.skill_count}</strong></div><div><span>有效</span><strong>{source.valid_count}</strong></div><div><span>待评测</span><strong>{source.pending_evaluation_count}</strong></div></div>
             <div className="source-path" title={source.local_path}><FolderGit2 size={14} />{source.local_path}</div>
-            <div className="source-footer"><span><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</span><span>{formatDate(source.last_scanned_at)}</span></div>
+            <div className="source-footer"><span>{source.url ? <><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</> : <><Layers3 size={14} />本地副本 · 不拉取</>}</span><span>{formatDate(source.last_scanned_at)}</span></div>
             <div className="source-actions">
-              <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>
+              {source.url && <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>}
               <button className="button secondary compact" disabled={Boolean(busy)} onClick={() => void onScan(source.id)}>{busy === `scan-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新扫描</button>
               {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? `评测 ${source.pending_evaluation_count}` : "配置 LLM"}</button>}
-              {source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
+              {source.url && source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
             </div>
           </article>
         ))}

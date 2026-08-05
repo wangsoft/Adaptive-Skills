@@ -10,7 +10,7 @@ Skill 库加载到全局环境。
 
 ## 核心原则
 
-- SQLite 是运行时事实来源，Excel 是人工标注和报表界面。
+- SQLite 是运行时事实来源，Excel 只作为可选的兼容导入导出与报表界面。
 - Skill ID 由“来源 UUID + 仓库内相对路径”生成，不依赖名称、排序或 Excel 行号。
 - 下载的仓库视为不可信输入：系统解析和静态审计文件，但绝不执行其中的脚本。
 - 项目引用由 `.adaptive-skills/manifest.json` 管理；未登记的目录或文件永不覆盖。
@@ -34,6 +34,7 @@ flowchart LR
 模块职责：
 
 - `sources.py`：克隆、登记、发现和快进更新 Git 来源。
+- `bootstrap.py`：只读发现本机 Skill 目录、安全复制归集和显式安装起步 Git 来源。
 - `scanner.py`：发现 `SKILL.md`，解析 frontmatter，校验 Agent Skills 约束，计算哈希并做静态安全审计。
 - `database.py`：SQLite schema、FTS5 索引、来源/Skill/标注/扫描记录和项目索引。
 - `catalog.py`：稳定 ID 查询、人工标注、中文与英文混合的可解释排序。
@@ -57,6 +58,34 @@ uv pip install -e '.[excel]'
 ```
 
 不安装包也可以在仓库中用 `PYTHONPATH=src python3 -m adaptive_skills ...` 运行。
+
+## 首次初始化本地仓库
+
+桌面 App 在空仓库第一次启动时会自动打开“初始化”工作台，之后也可以从左侧菜单随时进入。
+它默认扫描 `~/.agents/skills`、`~/.claude/skills` 和 `~/.codex/skills`，也允许手动增加目录。
+发现阶段只读；用户审核并确认后，系统才把 Skill **复制**到当前库的
+`local-imports/` 来源。原目录不会被移动、删除、重命名或改写。
+
+安全边界：
+
+- 系统内置 Skill、软链接目标、已在当前仓库中的 Skill 和内容重复项只展示，不自动导入；
+- 导入前后用内容哈希防止“审核后源码变化”，拒绝包含软链接、目标冲突或超限的目录树；
+- 本地导入只建立 `local-imports` 来源并扫描进 SQLite，不会自动调用 LLM；
+- 起步 Git 来源只有在用户勾选并确认网络操作后才 Clone，下载内容仍按不可信输入静态扫描。
+
+命令行可以执行同一流程：
+
+```bash
+adaptive-skills --library /Users/leowang/skills bootstrap status
+adaptive-skills --library /Users/leowang/skills bootstrap discover
+adaptive-skills --library /Users/leowang/skills bootstrap discover --root /path/to/more-skills
+adaptive-skills --library /Users/leowang/skills bootstrap install --starter openai-plugins
+```
+
+`bootstrap discover` 的返回值包含每个候选的 `path` 和 `tree_hash`。CLI 导入需要把审核过的
+二者作为 JSON 传给 `bootstrap import --candidate`；批量审核和导入更推荐使用桌面工作台。
+内置起步清单目前包括 OpenAI Plugins、Anthropic Agent Skills 和 Superpowers；清单只是入口，
+不会在后台搜索 GitHub 或自动下载。
 
 ## 从现有 Skill 库开始
 
@@ -185,7 +214,8 @@ manifest 记录来源 URL、ref、commit、仓库内路径、内容哈希、安�
 桌面端位于 `app/`，采用 Tauri 2、React 和 TypeScript。当前可以：
 
 - 查看真实目录概览、来源状态、有效性和风险分布；
-- 按来源、分类和风险筛选 Skill，查看 `SKILL.md`、人工整理与静态审计；
+- 首次使用时扫描常用目录、审核候选并安全复制归集，也可显式安装起步 Git 来源；
+- 按来源、分类和风险筛选 Skill，查看 `SKILL.md`、AI 整理与静态审计；
 - 根据项目需求生成推荐，显式选择后创建 manifest 管理的软链接；
 - 检查项目链接状态、同步来源漂移和安全移除链接；
 - 从历史项目列表进入详情、导入已有 manifest，并重新定位移动后的项目；

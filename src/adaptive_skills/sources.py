@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import Settings
-from .database import Database, row_dict, utc_now
+from .database import Database, path_is_within, row_dict, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
 
 
@@ -130,6 +130,34 @@ class SourceManager:
             url = remote.stdout.strip() if remote.returncode == 0 else None
         return self._insert(source_name, local_path, url, tracked_ref)
 
+    def register_local(
+        self, path: str | Path, name: str | None = None
+    ) -> dict:
+        """Register a local-maintained source inside the configured library."""
+        self.settings.ensure()
+        lexical_path = Path(path).expanduser().absolute()
+        if lexical_path.is_symlink():
+            raise ValidationError(f"Local source cannot be a symlink: {lexical_path}")
+        local_path = lexical_path.resolve()
+        if not path_is_within(local_path, self.settings.library):
+            raise ValidationError(
+                f"Local source must be inside the Skill library: {local_path}"
+            )
+        if local_path == self.settings.library:
+            raise ValidationError("The Skill library root cannot be a local source")
+        local_path.mkdir(parents=True, exist_ok=True)
+        for item in self.list():
+            if Path(item["local_path"]).resolve() == local_path:
+                return item
+        source_name = validate_source_name(name or local_path.name)
+        return self._insert(
+            source_name,
+            local_path,
+            None,
+            None,
+            update_policy="local",
+        )
+
     def discover(self) -> list[dict]:
         self.settings.ensure()
         added: list[dict] = []
@@ -157,7 +185,11 @@ class SourceManager:
         path: Path,
         url: str | None,
         tracked_ref: str | None,
+        *,
+        update_policy: str = "remote",
     ) -> dict:
+        if update_policy not in UPDATE_POLICIES:
+            raise ValidationError(f"Unknown source update policy: {update_policy}")
         now = utc_now()
         source_id = str(uuid.uuid4())
         try:
@@ -165,9 +197,9 @@ class SourceManager:
                 connection.execute(
                     """
                     INSERT INTO sources(
-                        id, name, url, local_path, tracked_ref, head_sha,
+                        id, name, url, local_path, tracked_ref, update_policy, head_sha,
                         status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'registered', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'registered', ?, ?)
                     """,
                     (
                         source_id,
@@ -175,6 +207,7 @@ class SourceManager:
                         url,
                         str(path),
                         tracked_ref,
+                        update_policy,
                         git_head(path),
                         now,
                         now,

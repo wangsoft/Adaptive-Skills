@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  bootstrapDiscoverArgs,
+  bootstrapImportArgs,
+  bootstrapInstallArgs,
   projectApplyArgs,
   projectHistoryArgs,
   projectPlanArgs,
@@ -27,6 +30,10 @@ import type {
   LLMEvaluation,
   LLMEvaluationRun,
   ProjectSummary,
+  BootstrapCandidate,
+  BootstrapDiscovery,
+  BootstrapImportResult,
+  BootstrapInstallResult,
 } from "./types";
 
 function commandError(error: unknown): Error {
@@ -71,6 +78,40 @@ export const api = {
   ),
   scan: (library: string, sourceId?: string) =>
     runCommand<unknown[]>(library, ["scan", ...(sourceId ? [sourceId] : [])]),
+  bootstrapDiscover: (library: string, roots: string[] = []) =>
+    runCommand<BootstrapDiscovery>(library, bootstrapDiscoverArgs(roots)),
+  bootstrapImport: async (
+    library: string,
+    candidates: Array<Pick<BootstrapCandidate, "path" | "tree_hash">>,
+  ): Promise<BootstrapImportResult> => {
+    const chunks: Array<Array<Pick<BootstrapCandidate, "path" | "tree_hash">>> = [];
+    for (let index = 0; index < candidates.length; index += 40) {
+      chunks.push(candidates.slice(index, index + 40));
+    }
+    const parts: BootstrapImportResult[] = [];
+    for (const chunk of chunks) {
+      parts.push(await runCommand<BootstrapImportResult>(
+        library,
+        bootstrapImportArgs(chunk),
+      ));
+    }
+    const last = parts.at(-1);
+    if (!last) throw new Error("请至少选择一个要复制归集的 Skill");
+    return {
+      total: parts.reduce((sum, item) => sum + item.total, 0),
+      imported: parts.reduce((sum, item) => sum + item.imported, 0),
+      skipped: parts.reduce((sum, item) => sum + item.skipped, 0),
+      failed: parts.reduce((sum, item) => sum + item.failed, 0),
+      results: parts.flatMap((item) => item.results),
+      scan: last.scan,
+      source: last.source,
+    };
+  },
+  bootstrapInstall: (library: string, starterIds: string[]) =>
+    runCommand<BootstrapInstallResult>(
+      library,
+      bootstrapInstallArgs(starterIds),
+    ),
   addSource: (library: string, url: string, name?: string) =>
     runCommand<Record<string, unknown>>(library, sourceAddArgs(url, name)),
   updateSource: (library: string, sourceId: string) =>

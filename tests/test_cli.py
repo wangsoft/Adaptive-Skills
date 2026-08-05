@@ -34,6 +34,38 @@ def run_cli(library: Path, *args: str) -> object:
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_can_discover_and_copy_import_local_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            library = root / "library"
+            local_root = root / "agent-skills"
+            original = write_skill(
+                local_root, "bootstrap-skill", "Imported during first-run setup."
+            )
+
+            preview = run_cli(
+                library, "bootstrap", "discover", "--root", str(local_root)
+            )
+            candidate = preview["candidates"][0]
+            imported = run_cli(
+                library,
+                "bootstrap",
+                "import",
+                "--candidate",
+                json.dumps(
+                    {"path": candidate["path"], "tree_hash": candidate["tree_hash"]}
+                ),
+            )
+
+            self.assertEqual(imported["imported"], 1)
+            self.assertTrue(original.is_dir())
+            self.assertTrue(
+                (library / "local-imports" / "bootstrap-skill" / "SKILL.md").is_file()
+            )
+            status = run_cli(library, "bootstrap", "status")
+            self.assertEqual(status["local_source"]["name"], "local-imports")
+            self.assertGreaterEqual(len(status["starters"]), 3)
+
     def test_cli_can_review_a_current_audit_finding(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

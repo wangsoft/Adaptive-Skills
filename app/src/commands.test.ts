@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  bootstrapDiscoverArgs,
+  bootstrapImportArgs,
+  bootstrapInstallArgs,
   projectApplyArgs,
   projectHistoryArgs,
   projectPlanArgs,
@@ -99,6 +102,28 @@ describe("desktop command contract", () => {
       "skill", "audit-review", "skill-id", "finding-id",
       "--status", "reviewed_false_positive",
       "--note", "documentation example",
+    ]);
+  });
+
+  it("keeps bootstrap discovery roots as separate process arguments", () => {
+    expect(bootstrapDiscoverArgs(["/tmp/skills one", "/tmp/skills-two"])).toEqual([
+      "bootstrap", "discover", "--root", "/tmp/skills one", "--root", "/tmp/skills-two",
+    ]);
+  });
+
+  it("serializes bootstrap copy candidates with their reviewed hash", () => {
+    const args = bootstrapImportArgs([
+      { path: "/tmp/skill one", tree_hash: "hash-one" },
+      { path: "/tmp/skill-two", tree_hash: "hash-two" },
+    ]);
+    expect(args.slice(0, 2)).toEqual(["bootstrap", "import"]);
+    expect(args.filter((value) => value === "--candidate")).toHaveLength(2);
+    expect(JSON.parse(args[3])).toEqual({ path: "/tmp/skill one", tree_hash: "hash-one" });
+  });
+
+  it("emits one explicit flag for every curated starter source", () => {
+    expect(bootstrapInstallArgs(["openai-plugins", "superpowers"])).toEqual([
+      "bootstrap", "install", "--starter", "openai-plugins", "--starter", "superpowers",
     ]);
   });
 });

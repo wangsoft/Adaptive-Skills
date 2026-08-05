@@ -217,6 +217,101 @@ export interface CategoryFilter {
   count: number;
 }
 
+export type BootstrapCandidateKind = "local" | "git" | "symlink" | "system" | "managed";
+
+export interface BootstrapDefaultRoot {
+  id: string;
+  label: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface BootstrapRoot {
+  path: string;
+  exists: boolean;
+  candidate_count: number;
+  error: string | null;
+}
+
+export interface BootstrapCandidate {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  real_path: string;
+  root: string;
+  kind: BootstrapCandidateKind;
+  tree_hash: string;
+  file_count: number;
+  git_root: string | null;
+  git_url: string | null;
+  duplicate_of: string | null;
+  importable: boolean;
+  reason: string;
+}
+
+export interface BootstrapDiscovery {
+  roots: BootstrapRoot[];
+  root_count: number;
+  candidate_count: number;
+  importable_count: number;
+  candidates: BootstrapCandidate[];
+}
+
+export interface BootstrapStarter {
+  id: string;
+  name: string;
+  title: string;
+  url: string;
+  homepage: string;
+  license: string;
+  maintainer: string;
+  description: string;
+  installed: boolean;
+}
+
+export interface BootstrapStatus {
+  default_roots: BootstrapDefaultRoot[];
+  starters: BootstrapStarter[];
+  local_source: Omit<
+    SourceSummary,
+    "skill_count" | "valid_count" | "invalid_count" | "elevated_risk_count" | "pending_evaluation_count"
+  > | null;
+}
+
+export interface BootstrapImportItem {
+  path: string;
+  status: "imported" | "duplicate" | "failed";
+  destination: string | null;
+  error: string | null;
+}
+
+export interface BootstrapImportResult {
+  total: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  results: BootstrapImportItem[];
+  scan: Record<string, unknown> | null;
+  source: Record<string, unknown>;
+}
+
+export interface BootstrapInstallItem {
+  id: string;
+  status: "installed" | "already-installed" | "failed";
+  source: Record<string, unknown> | null;
+  scan: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface BootstrapInstallResult {
+  total: number;
+  installed: number;
+  already_installed: number;
+  failed: number;
+  results: BootstrapInstallItem[];
+}
+
 export interface AppSnapshot {
   contract_version: number;
   generated_at: string;
@@ -226,6 +321,7 @@ export interface AppSnapshot {
   skills: SkillSummary[];
   filters: { categories: CategoryFilter[]; risks: RiskLevel[] };
   llm: LLMStatus;
+  bootstrap: BootstrapStatus;
   query: string | null;
   capabilities: Record<string, boolean>;
 }

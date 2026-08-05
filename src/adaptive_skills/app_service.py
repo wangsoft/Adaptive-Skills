@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from .catalog import Catalog
+from .bootstrap import BootstrapService
 from .config import Settings
 from .database import Database, utc_now
 from .errors import ValidationError
 from .evaluation import EvaluationService
 
 
-APP_CONTRACT_VERSION = 5
+APP_CONTRACT_VERSION = 6
 RISK_LEVELS = ("none", "low", "medium", "high", "critical")
 
 
@@ -26,6 +27,7 @@ class AppService:
         self.database = database or Database(settings)
         self.catalog = Catalog(settings, self.database)
         self.evaluations = EvaluationService(settings, self.database)
+        self.bootstrap = BootstrapService(settings, self.database)
 
     def snapshot(
         self, *, query: str | None = None, limit: int = 500
@@ -69,6 +71,7 @@ class AppService:
                 **llm,
                 "proposals": self.evaluations.list(status="proposed", limit=100),
             },
+            "bootstrap": self.bootstrap.status(),
             "query": normalized_query or None,
             "capabilities": {
                 "source_add": True,
@@ -87,6 +90,7 @@ class AppService:
                 "llm_review": True,
                 "audit_review": True,
                 "project_registry": True,
+                "bootstrap": True,
             },
         }
 

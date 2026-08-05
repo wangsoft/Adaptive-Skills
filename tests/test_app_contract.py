@@ -70,6 +70,9 @@ class AppContractTests(unittest.TestCase):
         self.assertEqual(installer["capability_hint_count"], 0)
         self.assertIn("categories", snapshot["filters"])
         self.assertTrue(snapshot["capabilities"]["audit_review"])
+        self.assertTrue(snapshot["capabilities"]["bootstrap"])
+        self.assertGreaterEqual(len(snapshot["bootstrap"]["starters"]), 3)
+        self.assertEqual(len(snapshot["bootstrap"]["default_roots"]), 3)
 
     def test_snapshot_can_filter_by_query_without_exposing_risky_skills(self) -> None:
         snapshot = AppService(self.settings).snapshot(

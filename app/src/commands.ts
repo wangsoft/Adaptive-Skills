@@ -23,6 +23,32 @@ export function sourceUpdatePolicyArgs(
   return ["source", "policy", sourceId, policy];
 }
 
+export function bootstrapDiscoverArgs(roots: string[]): string[] {
+  return [
+    "bootstrap", "discover",
+    ...roots.flatMap((root) => ["--root", root]),
+  ];
+}
+
+export function bootstrapImportArgs(
+  candidates: Array<{ path: string; tree_hash: string }>,
+): string[] {
+  return [
+    "bootstrap", "import",
+    ...candidates.flatMap((candidate) => [
+      "--candidate",
+      JSON.stringify({ path: candidate.path, tree_hash: candidate.tree_hash }),
+    ]),
+  ];
+}
+
+export function bootstrapInstallArgs(starterIds: string[]): string[] {
+  return [
+    "bootstrap", "install",
+    ...starterIds.flatMap((id) => ["--starter", id]),
+  ];
+}
+
 export function auditReviewArgs(
   skillId: string,
   findingId: string,

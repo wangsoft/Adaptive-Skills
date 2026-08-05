@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .app_service import AppService
+from .bootstrap import BootstrapService
 from .catalog import Catalog
 from .config import Settings
 from .database import Database
-from .errors import AdaptiveSkillsError
+from .errors import AdaptiveSkillsError, ValidationError
 from .evaluation import EvaluationService
 from .inventory import InventoryBridge
 from .projects import ProjectManager
@@ -43,6 +44,36 @@ def _cmd_init(arguments: argparse.Namespace) -> dict[str, Any]:
         "database": str(settings.database),
         "schema_version": int(version),
     }
+
+
+def _cmd_bootstrap_status(arguments: argparse.Namespace) -> dict[str, Any]:
+    return BootstrapService(_settings(arguments)).status()
+
+
+def _cmd_bootstrap_discover(arguments: argparse.Namespace) -> dict[str, Any]:
+    return BootstrapService(_settings(arguments)).discover(arguments.root)
+
+
+def _cmd_bootstrap_import(arguments: argparse.Namespace) -> dict[str, Any]:
+    candidates: list[dict[str, str]] = []
+    for raw in arguments.candidate:
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValidationError(f"Invalid bootstrap candidate JSON: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValidationError("Bootstrap candidate must be a JSON object")
+        candidates.append(
+            {
+                "path": str(value.get("path") or ""),
+                "tree_hash": str(value.get("tree_hash") or ""),
+            }
+        )
+    return BootstrapService(_settings(arguments)).import_candidates(candidates)
+
+
+def _cmd_bootstrap_install(arguments: argparse.Namespace) -> dict[str, Any]:
+    return BootstrapService(_settings(arguments)).install_starters(arguments.starter)
 
 
 def _cmd_source_add(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -309,6 +340,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     init = commands.add_parser("init", help="Initialize the SQLite catalog")
     _handler(init, _cmd_init)
+
+    bootstrap = commands.add_parser(
+        "bootstrap", help="Discover and safely build a local Skill library"
+    )
+    bootstrap_commands = bootstrap.add_subparsers(
+        dest="bootstrap_command", required=True
+    )
+    bootstrap_status = bootstrap_commands.add_parser(
+        "status", help="Show default local roots and curated Git sources"
+    )
+    _handler(bootstrap_status, _cmd_bootstrap_status)
+    bootstrap_discover = bootstrap_commands.add_parser(
+        "discover", help="Preview Skills found in common or explicit directories"
+    )
+    bootstrap_discover.add_argument("--root", action="append", type=Path)
+    _handler(bootstrap_discover, _cmd_bootstrap_discover)
+    bootstrap_import = bootstrap_commands.add_parser(
+        "import", help="Copy reviewed local Skills into the managed local source"
+    )
+    bootstrap_import.add_argument("--candidate", action="append", required=True)
+    _handler(bootstrap_import, _cmd_bootstrap_import)
+    bootstrap_install = bootstrap_commands.add_parser(
+        "install", help="Clone and scan explicitly selected curated Git sources"
+    )
+    bootstrap_install.add_argument("--starter", action="append", required=True)
+    _handler(bootstrap_install, _cmd_bootstrap_install)
 
     source = commands.add_parser("source", help="Manage Git skill sources")
     source_commands = source.add_subparsers(dest="source_command", required=True)

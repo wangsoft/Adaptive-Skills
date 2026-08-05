@@ -7,6 +7,7 @@ use std::process::Command;
 
 const ALLOWED_COMMANDS: &[&str] = &[
     "app",
+    "bootstrap",
     "skill",
     "search",
     "source",
