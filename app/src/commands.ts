@@ -16,6 +16,10 @@ export function sourceRefreshAllArgs(): string[] {
   return ["source", "refresh-all"];
 }
 
+export function sourceReconcileArgs(): string[] {
+  return ["source", "reconcile"];
+}
+
 export function sourceUpdatePolicyArgs(
   sourceId: string,
   policy: "remote" | "local",

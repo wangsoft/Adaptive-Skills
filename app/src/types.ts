@@ -163,6 +163,27 @@ export interface SourceRefreshAllResult {
   results: SourceRefreshResultItem[];
 }
 
+export interface SourceReconcileResultItem {
+  source_id: string;
+  source: string;
+  status: "scanned" | "failed";
+  type?: string;
+  error?: string;
+  scan?: {
+    discovered: number;
+    valid: number;
+    invalid: number;
+    critical: number;
+  };
+}
+
+export interface SourceReconcileResult {
+  discovered: number;
+  scanned: number;
+  failed: number;
+  results: SourceReconcileResultItem[];
+}
+
 export interface SearchReason {
   field: string;
   terms: string[];

@@ -8,6 +8,7 @@ import {
   projectPlanArgs,
   snapshotArgs,
   sourceAddArgs,
+  sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
   llmConfigArgs,
@@ -48,6 +49,10 @@ describe("desktop command contract", () => {
 
   it("uses one explicit command for refreshing every source", () => {
     expect(sourceRefreshAllArgs()).toEqual(["source", "refresh-all"]);
+  });
+
+  it("uses one explicit command for discovering manual clones", () => {
+    expect(sourceReconcileArgs()).toEqual(["source", "reconcile"]);
   });
 
   it("keeps source policy changes in separate process arguments", () => {

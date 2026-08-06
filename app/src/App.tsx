@@ -70,6 +70,7 @@ import type {
   SkillDetail,
   SkillSummary,
   SourceRefreshAllResult,
+  SourceReconcileResult,
   SourceSummary,
   SourceUpdatePolicy,
   LLMProfile,
@@ -141,10 +142,18 @@ function App() {
   const didAutoOpenBootstrap = useRef(false);
 
   const loadSnapshot = useCallback(
-    async (query?: string) => {
+    async (query?: string, reconcile = false) => {
       setLoading(true);
       setError(null);
       try {
+        let reconcileError: string | null = null;
+        if (reconcile) {
+          try {
+            await api.reconcileSources(library);
+          } catch (reason) {
+            reconcileError = reason instanceof Error ? reason.message : String(reason);
+          }
+        }
         const value = await api.snapshot(library, query);
         setSnapshot(value);
         if (!didAutoOpenBootstrap.current && value.summary.source_count === 0) {
@@ -153,6 +162,7 @@ function App() {
         }
         if (value.library.path !== library) setLibrary(value.library.path);
         localStorage.setItem("adaptive-skills-library", value.library.path);
+        if (reconcileError) setError(`新来源发现未完成：${reconcileError}`);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -163,7 +173,7 @@ function App() {
   );
 
   useEffect(() => {
-    void loadSnapshot();
+    void loadSnapshot(undefined, true);
   }, [loadSnapshot]);
 
   useEffect(() => {
@@ -246,6 +256,21 @@ function App() {
     }
   };
 
+  const reconcileLocalSources = async (): Promise<SourceReconcileResult | null> => {
+    setBusy("source-reconcile");
+    setError(null);
+    try {
+      const result = await api.reconcileSources(library);
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const addAndScanSource = (url: string, name?: string): Promise<boolean> =>
     runAction("source-add", async () => {
       const added = await api.addSource(library, url, name);
@@ -307,7 +332,7 @@ function App() {
             title="刷新目录"
             aria-label="刷新目录"
             disabled={loading || Boolean(busy)}
-            onClick={() => void loadSnapshot()}
+            onClick={() => void loadSnapshot(undefined, true)}
           >
             <RefreshCw size={18} className={loading ? "spin" : ""} />
           </button>
@@ -353,6 +378,7 @@ function App() {
                 busy={busy}
                 onAdd={addAndScanSource}
                 onScan={(id) => runAction(`scan-${id}`, () => api.scan(library, id))}
+                onReconcile={reconcileLocalSources}
                 onRefreshAll={refreshAllSources}
                 onSetPolicy={(id, policy) =>
                   runAction(`policy-${id}`, () => api.setSourcePolicy(library, id, policy))
@@ -815,12 +841,13 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   return <label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
 }
 
-function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefreshAll, onSetPolicy, llmEnabled, onEvaluate }: {
+function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, onSetPolicy, llmEnabled, onEvaluate }: {
   library: string;
   sources: SourceSummary[];
   busy: string | null;
   onAdd: (url: string, name?: string) => Promise<boolean>;
   onScan: (id: string) => Promise<boolean>;
+  onReconcile: () => Promise<SourceReconcileResult | null>;
   onUpdate: (id: string) => Promise<boolean>;
   onRefreshAll: () => Promise<SourceRefreshAllResult | null>;
   onSetPolicy: (id: string, policy: SourceUpdatePolicy) => Promise<boolean>;
@@ -832,6 +859,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   const [url, setUrl] = useState(initialDraft.url);
   const [name, setName] = useState(initialDraft.name);
   const [refreshResult, setRefreshResult] = useState<SourceRefreshAllResult | null>(null);
+  const [reconcileResult, setReconcileResult] = useState<SourceReconcileResult | null>(null);
   const [refreshHistory, setRefreshHistory] = useState(() => loadSourceRefreshHistory(localStorage, library));
   useEffect(() => {
     saveSourceDraft(localStorage, library, { adding, url, name });
@@ -849,11 +877,18 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   };
   const refreshAll = async () => {
     setRefreshResult(null);
+    setReconcileResult(null);
     const result = await onRefreshAll();
     if (result) {
       setRefreshResult(result);
       setRefreshHistory(recordSourceRefresh(localStorage, library, result));
     }
+  };
+  const reconcile = async () => {
+    setReconcileResult(null);
+    setRefreshResult(null);
+    const result = await onReconcile();
+    if (result) setReconcileResult(result);
   };
   const refreshFailures = refreshResult?.results.filter((item) => item.status === "failed") ?? [];
   const evaluateSource = (source: SourceSummary) => {
@@ -866,8 +901,12 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
   return (
     <div className="stack gap-lg">
       <div className="section-toolbar">
-        <div><h2>{sources.length} 个来源</h2><p>远程 Git 只接受 fast-forward；本地归集来源仅重新扫描。</p></div>
+        <div><h2>{sources.length} 个来源</h2><p>根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。</p></div>
         <div className="button-row">
+          <button className="button secondary" disabled={Boolean(busy)} onClick={() => void reconcile()}>
+            {busy === "source-reconcile" ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />}
+            {busy === "source-reconcile" ? "正在检查目录…" : "发现本地仓库"}
+          </button>
           <button className="button secondary" disabled={Boolean(busy) || !sources.length} onClick={() => void refreshAll()}>
             {busy === "refresh-all" ? <LoaderCircle className="spin" size={16} /> : <RefreshCw size={16} />}
             {busy === "refresh-all" ? "正在更新全部来源…" : "全部更新"}
@@ -875,6 +914,18 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onUpdate, onRefres
           <button className="button primary" disabled={Boolean(busy)} onClick={() => setAdding((value) => !value)}><Plus size={16} />添加 Git 来源</button>
         </div>
       </div>
+      {reconcileResult && (
+        <div className={`refresh-summary ${reconcileResult.failed ? "with-failures" : ""}`} role="status">
+          <div className="refresh-summary-heading">
+            {reconcileResult.failed ? <AlertTriangle size={18} /> : <Check size={18} />}
+            <div>
+              <strong>Skills 目录检查完成</strong>
+              <p>{reconcileResult.discovered ? `新发现 ${reconcileResult.discovered} 个 Git 来源 · ${reconcileResult.scanned} 个已扫描 · ${reconcileResult.failed} 个失败` : "没有发现未登记的顶层 Git 仓库"}</p>
+            </div>
+          </div>
+          {reconcileResult.results.filter((item) => item.status === "failed").map((item) => <div className="refresh-failures" key={item.source_id}><p><strong>{item.source}</strong><span>{item.error || "扫描失败"}</span></p></div>)}
+        </div>
+      )}
       {refreshResult && (
         <div className={`refresh-summary ${refreshResult.failed ? "with-failures" : ""}`} role="status">
           <div className="refresh-summary-heading">
@@ -1415,7 +1466,7 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
 }
 
 function ActivityToast({ label }: { label: string }) {
-  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
+  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "source-reconcile": "正在发现并扫描手动加入的 Git 仓库…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
   const message = messages[label] || (label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
   return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
 }

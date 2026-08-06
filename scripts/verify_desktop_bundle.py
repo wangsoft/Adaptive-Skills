@@ -66,6 +66,21 @@ def main() -> int:
         project = Path(raw) / "ordinary-project"
         project.mkdir()
         initialized = _run(core, library, "init")
+        manual_source = library / "manual-source"
+        manual_skill = manual_source / "manual-skill"
+        manual_skill.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "--quiet", str(manual_source)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        manual_skill.joinpath("SKILL.md").write_text(
+            "---\nname: manual-skill\ndescription: Verify a manually cloned source.\n---\n",
+            encoding="utf-8",
+        )
+        reconciled = _run(core, library, "source", "reconcile")
         snapshot = _run(core, library, "app", "snapshot", "--limit", "10")
         project_status = _run(core, library, "project", "status", str(project))
         if initialized.get("schema_version") != 5:
@@ -74,6 +89,8 @@ def main() -> int:
             raise RuntimeError("The packaged core returned an unexpected app contract")
         if not snapshot.get("capabilities", {}).get("bootstrap"):
             raise RuntimeError("The packaged core does not include bootstrap support")
+        if reconciled.get("discovered") != 1 or reconciled.get("scanned") != 1:
+            raise RuntimeError("The packaged core cannot discover a manual Git clone")
         if project_status.get("managed") is not False:
             raise RuntimeError("The packaged core cannot distinguish an ordinary project")
 

@@ -100,7 +100,18 @@ adaptive-skills --library /Users/leowang/skills inventory import-xlsx \
   /Users/leowang/skills/skills-inventory.xlsx
 ```
 
-`source discover` 只登记 Skill 库第一层中的 Git 仓库。也可以显式增加或登记来源：
+`source discover` 只登记 Skill 库第一层中的 Git 仓库。若是直接在 Skills 根目录执行了
+`git clone`，可以用一个命令完成发现和扫描：
+
+```bash
+adaptive-skills --library /Users/leowang/skills source reconcile
+```
+
+桌面 App 启动和右上角刷新时会自动执行相同的本地检查；来源页的“发现本地仓库”可随时手动
+触发并显示新增、已扫描和失败数量。该流程不拉取网络，也不执行仓库代码。非 Git 的普通
+Skill 文件夹仍通过“初始化”页面审核并复制归集，避免误把缓存、项目目录或 vendor 目录当成来源。
+
+也可以显式增加或登记来源：
 
 ```bash
 adaptive-skills --library /Users/leowang/skills source add \

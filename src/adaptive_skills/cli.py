@@ -107,6 +107,10 @@ def _cmd_source_refresh_all(arguments: argparse.Namespace) -> dict[str, Any]:
     return SourceRefreshService(_settings(arguments)).refresh_all()
 
 
+def _cmd_source_reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRefreshService(_settings(arguments)).reconcile()
+
+
 def _cmd_source_policy(arguments: argparse.Namespace) -> dict[str, Any]:
     return SourceManager(_settings(arguments)).set_update_policy(
         arguments.source, arguments.policy
@@ -397,6 +401,10 @@ def build_parser() -> argparse.ArgumentParser:
         "refresh-all", help="Fast-forward and rescan every source, continuing on errors"
     )
     _handler(source_refresh_all, _cmd_source_refresh_all)
+    source_reconcile = source_commands.add_parser(
+        "reconcile", help="Discover and scan newly cloned top-level Git repositories"
+    )
+    _handler(source_reconcile, _cmd_source_reconcile)
     source_policy = source_commands.add_parser(
         "policy", help="Choose remote-following or local-maintained source behavior"
     )

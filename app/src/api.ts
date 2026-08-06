@@ -8,6 +8,7 @@ import {
   projectPlanArgs,
   snapshotArgs,
   sourceAddArgs,
+  sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
   llmConfigArgs,
@@ -23,6 +24,7 @@ import type {
   ProjectStatus,
   SkillDetail,
   SourceRefreshAllResult,
+  SourceReconcileResult,
   SourceUpdatePolicy,
   LLMStatus,
   LLMProfileProvider,
@@ -116,6 +118,8 @@ export const api = {
     runCommand<Record<string, unknown>>(library, sourceAddArgs(url, name)),
   updateSource: (library: string, sourceId: string) =>
     runCommand<Record<string, unknown>>(library, ["source", "update", sourceId]),
+  reconcileSources: (library: string) =>
+    runCommand<SourceReconcileResult>(library, sourceReconcileArgs()),
   refreshAllSources: (library: string) =>
     runCommand<SourceRefreshAllResult>(library, sourceRefreshAllArgs()),
   setSourcePolicy: (

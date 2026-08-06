@@ -16,6 +16,38 @@ class SourceRefreshService:
         self.sources = SourceManager(settings)
         self.scanner = CatalogScanner(settings)
 
+    def reconcile(self) -> dict[str, Any]:
+        """Register and scan newly cloned top-level Git repositories."""
+        results: list[dict[str, Any]] = []
+        discovered = self.sources.discover()
+        for source in discovered:
+            try:
+                scan = self.scanner.scan(source["id"])[0]
+                results.append(
+                    {
+                        "source_id": source["id"],
+                        "source": source["name"],
+                        "status": "scanned",
+                        "scan": scan,
+                    }
+                )
+            except AdaptiveSkillsError as exc:
+                results.append(
+                    {
+                        "source_id": source["id"],
+                        "source": source["name"],
+                        "status": "failed",
+                        "type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+        return {
+            "discovered": len(discovered),
+            "scanned": sum(item["status"] == "scanned" for item in results),
+            "failed": sum(item["status"] == "failed" for item in results),
+            "results": results,
+        }
+
     def refresh_all(self) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
         for source in self.sources.list():

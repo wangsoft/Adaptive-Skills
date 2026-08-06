@@ -15,6 +15,34 @@ from tests.test_cli import run_cli
 
 
 class SourceRefreshServiceTests(unittest.TestCase):
+    def test_reconcile_discovers_and_scans_manually_cloned_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            library = Path(raw) / "library"
+            manual = init_repo(library / "manual-source")
+            write_skill(manual, "manual-skill", "A manually cloned skill source.")
+            commit_all(manual, "manual clone")
+            settings = Settings.load(library)
+
+            result = SourceRefreshService(settings).reconcile()
+
+            self.assertEqual(result["discovered"], 1)
+            self.assertEqual(result["scanned"], 1)
+            self.assertEqual(result["failed"], 0)
+            self.assertEqual(result["results"][0]["source"], "manual-source")
+            self.assertEqual(result["results"][0]["scan"]["valid"], 1)
+            self.assertEqual(
+                [skill["name"] for skill in Catalog(settings).list_skills()],
+                ["manual-skill"],
+            )
+            self.assertEqual(SourceRefreshService(settings).reconcile()["discovered"], 0)
+
+            second = init_repo(library / "second-source")
+            write_skill(second, "second-skill", "A second manual source.")
+            commit_all(second, "second clone")
+            cli_result = run_cli(library, "source", "reconcile")
+            self.assertEqual(cli_result["discovered"], 1)
+            self.assertEqual(cli_result["scanned"], 1)
+
     def test_refresh_all_updates_scans_and_continues_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
