@@ -281,7 +281,9 @@ API Key 写入操作系统凭据库，不进入 JSON、SQLite、命令参数或�
 Homebrew 等常见目录中发现 Codex/Claude CLI，并把解析到的路径显示在连接卡片中。特殊安装
 位置可以通过 `ADAPTIVE_SKILLS_CODEX_EXECUTABLE` 或
 `ADAPTIVE_SKILLS_CLAUDE_EXECUTABLE` 指定绝对路径。无法发现 CLI 时，界面会暂停评测按钮；
-每次评测完成后会显示处理、提案和失败数量，最近的失败原因也会保留在评测页面中。
+每次评测完成后会显示处理、进入审核、评分未变化、提醒和失败数量。已经有智能评分的 Skill
+重新评测后，分数相同的结果只记入 SQLite，不再进入审核列表；分数变化时会展示原分数、
+新分数和差值。新 Skill 与现有 Skill 同名时会列出冲突来源。
 “清空失败记录”只删除失败结果，不会影响待审核提案、已应用结果或待评测队列。
 
 命令行配置和查看状态：
@@ -330,6 +332,12 @@ LLM 在无工具、无会话持久化的结构化输出模式中运行。下载�
 的总分。每条结果记录 profile、provider、model、prompt、taxonomy 和 Skill 内容哈希，内容变化后旧
 评测不会被误用。
 
+模型只读取本次待评测的 Skill，并输出简短的能力指纹；名称冲突、能力覆盖和评分强弱比较
+全部在本机 SQLite/Python 中完成，不会为了去重把其他 Skill 的正文额外发送给模型。如果现有
+有效、低风险且已评分的 Skill 完整覆盖新 Skill 的全部能力指纹，并且评分严格更高，审核卡会
+给出“建议忽略此 Skill”，同时持久化匹配对象、覆盖能力、评分和建议。该建议不会自动停用、
+删除或隐藏 Skill，最终取舍仍由用户确认。
+
 项目推荐列表里的“匹配”是用于排序的需求相关度，可以高于 10；它不是 Skill
 质量分。人工或 LLM 评测产生的“质量分”始终限定在 0–10，并在界面中显式标记
 `/10`。
@@ -361,7 +369,7 @@ adaptive-skills --library /Users/leowang/skills inventory export \
 
 运行时状态位于 `<library>/.adaptive-skills/`：
 
-- `catalog.db`：来源、Skill 元数据、annotations、扫描记录和 FTS5 索引。
+- `catalog.db`：来源、Skill 元数据、annotations、评测差异与去重建议、扫描记录和 FTS5 索引。
 - Skill 仓库仍保留在各自 Git 工作区；数据库可以随时重新扫描重建。
 - 人工 annotations 通过稳定 ID 与 Skill 关联，重新扫描不会丢失。
 

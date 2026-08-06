@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .catalog import Catalog
+from .catalog import Catalog, query_terms
 from .config import Settings
 from .database import Database, json_value, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
@@ -25,7 +25,8 @@ from .sources import SourceManager
 from .taxonomy import CORE_L1, TAXONOMY_VERSION, Taxonomy
 
 
-PROMPT_VERSION = "skill-evaluation-v1"
+PROMPT_VERSION = "skill-evaluation-v2"
+FULL_CAPABILITY_COVERAGE = 1.0
 DIMENSION_WEIGHTS = {
     "problem_clarity": 0.15,
     "methodology_depth": 0.20,
@@ -61,6 +62,12 @@ def evaluation_schema() -> dict[str, Any]:
                 "properties": {name: score for name in DIMENSION_WEIGHTS},
                 "required": list(DIMENSION_WEIGHTS),
             },
+            "capabilities": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 12,
+                "items": {"type": "string", "minLength": 1, "maxLength": 80},
+            },
         },
         "required": [
             "category_l1",
@@ -72,6 +79,7 @@ def evaluation_schema() -> dict[str, Any]:
             "tags",
             "confidence",
             "dimensions",
+            "capabilities",
         ],
     }
 
@@ -727,6 +735,171 @@ class EvaluationService:
             ).fetchall()
         return {row["source_id"]: row["total"] for row in rows}
 
+    def _comparison_pool(self) -> list[dict[str, Any]]:
+        with self.database.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.id, s.name, s.description, s.content_hash,
+                       s.audit_severity, src.name AS source_name,
+                       a.category_l1, a.category_l2, a.problem, a.use_case,
+                       a.tags_json, a.score,
+                       a.content_hash AS annotation_content_hash,
+                       (
+                           SELECT e.raw_json
+                           FROM llm_evaluations e
+                           WHERE e.skill_id = s.id
+                             AND e.status IN ('proposed', 'applied')
+                             AND e.raw_json IS NOT NULL
+                           ORDER BY e.created_at DESC, e.id DESC
+                           LIMIT 1
+                       ) AS latest_evaluation_json
+                FROM skills s
+                JOIN sources src ON src.id = s.source_id
+                LEFT JOIN annotations a ON a.skill_id = s.id
+                WHERE s.active = 1 AND s.valid = 1
+                ORDER BY s.name, src.name, s.id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _normalized_name(value: str) -> str:
+        return " ".join(value.casefold().split())
+
+    @staticmethod
+    def _capability_matches(capability: str, candidate_text: str) -> bool:
+        normalized = " ".join(capability.casefold().split())
+        contains_cjk = bool(re.search(r"[\u3400-\u9fff]", normalized))
+        if normalized and (
+            (contains_cjk and normalized in candidate_text)
+            or (
+                not contains_cjk
+                and re.search(
+                    rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])",
+                    candidate_text,
+                )
+                is not None
+            )
+        ):
+            return True
+        terms = query_terms(capability)
+        if not terms:
+            return False
+        candidate_terms = set(query_terms(candidate_text))
+        matched = sum(term in candidate_terms for term in terms)
+        return matched / len(terms) >= 0.8
+
+    def _evaluation_insight(
+        self,
+        skill: dict[str, Any],
+        normalized: dict[str, Any],
+        pool: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        normalized_name = self._normalized_name(skill["name"])
+        name_conflicts = [
+            {
+                "id": candidate["id"],
+                "name": candidate["name"],
+                "source_name": candidate["source_name"],
+                "score": candidate["score"],
+            }
+            for candidate in pool
+            if candidate["id"] != skill["id"]
+            and self._normalized_name(candidate["name"]) == normalized_name
+        ]
+
+        ranked: list[tuple[float, float, dict[str, Any], list[str]]] = []
+        for candidate in pool:
+            if candidate["id"] == skill["id"] or candidate["score"] is None:
+                continue
+            if candidate["annotation_content_hash"] != candidate["content_hash"]:
+                continue
+            if candidate["audit_severity"] in {"high", "critical"}:
+                continue
+            if (
+                candidate["category_l1"]
+                and candidate["category_l1"] != normalized["category_l1"]
+            ):
+                continue
+            latest = json_value(candidate["latest_evaluation_json"], {})
+            prior_capabilities = (
+                latest.get("capabilities", []) if isinstance(latest, dict) else []
+            )
+            trusted_parts = [
+                candidate["name"],
+                candidate["description"],
+                candidate["category_l1"],
+                candidate["category_l2"],
+                candidate["problem"],
+                candidate["use_case"],
+                *json_value(candidate["tags_json"], []),
+                *(
+                    prior_capabilities
+                    if isinstance(prior_capabilities, list)
+                    else []
+                ),
+            ]
+            candidate_text = " ".join(
+                str(value or "") for value in trusted_parts
+            ).casefold()
+            matched = [
+                capability
+                for capability in normalized["capabilities"]
+                if self._capability_matches(capability, candidate_text)
+            ]
+            coverage = len(matched) / len(normalized["capabilities"])
+            if coverage <= 0:
+                continue
+            ranked.append((coverage, float(candidate["score"]), candidate, matched))
+        ranked.sort(key=lambda item: (-item[0], -item[1], item[2]["id"]))
+
+        comparison: dict[str, Any] = {}
+        if ranked:
+            coverage, existing_score, candidate, matched = ranked[0]
+            comparison = {
+                "relation": (
+                    "existing_covers"
+                    if coverage >= FULL_CAPABILITY_COVERAGE
+                    else "overlap"
+                ),
+                "matched_skill_id": candidate["id"],
+                "matched_skill_name": candidate["name"],
+                "matched_source_name": candidate["source_name"],
+                "existing_score": existing_score,
+                "coverage": round(coverage, 2),
+                "matched_capabilities": matched,
+                "reason": (
+                    f"Local comparison matched {len(matched)} of "
+                    f"{len(normalized['capabilities'])} capability fingerprints."
+                ),
+            }
+
+        previous_score = skill.get("score")
+        previous_score = (
+            float(previous_score) if previous_score is not None else None
+        )
+        score_delta = (
+            round(normalized["score"] - previous_score, 1)
+            if previous_score is not None
+            else None
+        )
+        requires_review = previous_score is None or score_delta != 0
+        recommendation = "review"
+        if (
+            previous_score is None
+            and comparison.get("relation") == "existing_covers"
+            and comparison["existing_score"] > normalized["score"]
+        ):
+            recommendation = "ignore"
+        return {
+            "previous_score": previous_score,
+            "score_delta": score_delta,
+            "requires_review": requires_review,
+            "name_conflicts": name_conflicts,
+            "comparison": comparison,
+            "recommendation": recommendation,
+        }
+
     def evaluate(
         self, *, source: str | None = None, limit: int | None = None
     ) -> dict[str, Any]:
@@ -747,6 +920,7 @@ class EvaluationService:
                 f"Evaluation limit must be between 1 and configured max {config.max_per_run}"
             )
         pending = self.pending(source=source, limit=run_limit)
+        comparison_pool = self._comparison_pool()
         results: list[dict[str, Any]] = []
         for item in pending:
             skill = self.catalog.get_skill(item["id"])
@@ -756,7 +930,7 @@ class EvaluationService:
                     self._prompt(skill),
                     evaluation_schema(),
                 )
-                results.append(self._store(skill, config, output))
+                results.append(self._store(skill, config, output, comparison_pool))
             except (ValidationError, OSError) as exc:
                 results.append(self._store_error(skill, config, str(exc)))
         return {
@@ -764,7 +938,19 @@ class EvaluationService:
             "model": config.model,
             "profile_id": config.active_profile_id,
             "requested": len(pending),
-            "proposed": sum(item["status"] == "proposed" for item in results),
+            "proposed": sum(
+                item["status"] == "proposed" and item["requires_review"]
+                for item in results
+            ),
+            "unchanged": sum(
+                item["status"] == "proposed" and not item["requires_review"]
+                for item in results
+            ),
+            "attention": sum(
+                (item["previous_score"] is None and bool(item["name_conflicts"]))
+                or item["recommendation"] == "ignore"
+                for item in results
+            ),
             "failed": sum(item["status"] == "error" for item in results),
             "results": results,
         }
@@ -775,17 +961,22 @@ class EvaluationService:
         if limit < 1 or limit > 5000:
             raise ValidationError("Evaluation list limit must be between 1 and 5000")
         clause = "WHERE e.status = ?" if status else ""
+        if status == "proposed":
+            clause += " AND COALESCE(i.requires_review, 1) = 1"
         parameters: tuple[Any, ...] = (status, limit) if status else (limit,)
         with self.database.transaction() as connection:
             rows = connection.execute(
                 f"""
                 SELECT e.*, s.name AS skill_name, src.name AS source_name,
                        CASE WHEN a.skill_id IS NULL THEN 0 ELSE 1 END AS has_annotation,
-                       CASE WHEN s.content_hash = e.content_hash THEN 1 ELSE 0 END AS current_content
+                       CASE WHEN s.content_hash = e.content_hash THEN 1 ELSE 0 END AS current_content,
+                       i.previous_score, i.score_delta, i.requires_review,
+                       i.name_conflicts_json, i.comparison_json, i.recommendation
                 FROM llm_evaluations e
                 JOIN skills s ON s.id = e.skill_id
                 JOIN sources src ON src.id = s.source_id
                 LEFT JOIN annotations a ON a.skill_id = s.id
+                LEFT JOIN llm_evaluation_insights i ON i.evaluation_id = e.id
                 {clause}
                 ORDER BY e.created_at DESC, e.id DESC LIMIT ?
                 """,
@@ -804,6 +995,8 @@ class EvaluationService:
         proposal = self.get(evaluation_id)
         if proposal["status"] != "proposed":
             raise ConflictError("Only proposed evaluations can be applied")
+        if not proposal["requires_review"]:
+            raise ConflictError("Unchanged evaluations do not require review or application")
         skill = self.catalog.get_skill(proposal["skill_id"])
         if skill["content_hash"] != proposal["content_hash"]:
             raise ConflictError("Skill content changed after evaluation; evaluate it again")
@@ -876,6 +1069,8 @@ class EvaluationService:
         proposal = self.get(evaluation_id)
         if proposal["status"] != "proposed":
             raise ConflictError("Only proposed evaluations can be rejected")
+        if not proposal["requires_review"]:
+            raise ConflictError("Unchanged evaluations do not require review or rejection")
         with self.database.transaction() as connection:
             connection.execute(
                 "UPDATE llm_evaluations SET status = 'rejected', reviewed_at = ? WHERE id = ?",
@@ -889,11 +1084,14 @@ class EvaluationService:
                 """
                 SELECT e.*, s.name AS skill_name, src.name AS source_name,
                        CASE WHEN a.skill_id IS NULL THEN 0 ELSE 1 END AS has_annotation,
-                       CASE WHEN s.content_hash = e.content_hash THEN 1 ELSE 0 END AS current_content
+                       CASE WHEN s.content_hash = e.content_hash THEN 1 ELSE 0 END AS current_content,
+                       i.previous_score, i.score_delta, i.requires_review,
+                       i.name_conflicts_json, i.comparison_json, i.recommendation
                 FROM llm_evaluations e
                 JOIN skills s ON s.id = e.skill_id
                 JOIN sources src ON src.id = s.source_id
                 LEFT JOIN annotations a ON a.skill_id = s.id
+                LEFT JOIN llm_evaluation_insights i ON i.evaluation_id = e.id
                 WHERE e.id = ?
                 """,
                 (evaluation_id,),
@@ -926,8 +1124,10 @@ class EvaluationService:
             "label and set category_candidate=true. Existing labels must use false.\n\n"
             "Score every dimension from 0 to 10. dependency_safety is higher when dependencies "
             "and operational risks are lower. differentiation is higher when the skill adds "
-            "distinct value rather than duplicating common instructions. Return only the "
-            "required structured object.\n\n"
+            "distinct value rather than duplicating common instructions. Also return 1-12 "
+            "concise capability fingerprints (80 characters maximum each) that describe only "
+            "the concrete outcomes this Skill can deliver. Do not infer or compare against any "
+            "other Skill. Return only the required structured object.\n\n"
             f"TAXONOMY ({TAXONOMY_VERSION}):\n{json.dumps(taxonomy, ensure_ascii=False)}\n\n"
             f"UNTRUSTED_SKILL_PAYLOAD:\n{json.dumps(input_payload, ensure_ascii=False)}"
         )
@@ -974,6 +1174,19 @@ class EvaluationService:
         if not isinstance(tags, list) or len(tags) > 8:
             raise ValidationError("tags must be a list with at most 8 values")
         normalized_tags = [self._text(tag, "tag", 40) for tag in tags]
+        capabilities = output["capabilities"]
+        if not isinstance(capabilities, list) or not 1 <= len(capabilities) <= 12:
+            raise ValidationError("capabilities must be a list with 1-12 values")
+        normalized_capabilities: list[str] = []
+        seen_capabilities: set[str] = set()
+        for capability in capabilities:
+            normalized_capability = " ".join(
+                self._text(capability, "capability", 80).split()
+            )
+            fingerprint = normalized_capability.casefold()
+            if fingerprint not in seen_capabilities:
+                seen_capabilities.add(fingerprint)
+                normalized_capabilities.append(normalized_capability)
         score = round(
             sum(
                 normalized_dimensions[name] * weight
@@ -991,6 +1204,7 @@ class EvaluationService:
             "tags": list(dict.fromkeys(normalized_tags)),
             "confidence": confidence,
             "dimensions": normalized_dimensions,
+            "capabilities": normalized_capabilities,
             "score": score,
         }
 
@@ -1005,10 +1219,16 @@ class EvaluationService:
         return value
 
     def _store(
-        self, skill: dict[str, Any], config: LLMConfig, output: dict[str, Any]
+        self,
+        skill: dict[str, Any],
+        config: LLMConfig,
+        output: dict[str, Any],
+        comparison_pool: list[dict[str, Any]],
     ) -> dict[str, Any]:
         normalized = self._validate_output(output)
+        insight = self._evaluation_insight(skill, normalized, comparison_pool)
         evaluation_id = str(uuid.uuid4())
+        created_at = utc_now()
         with self.database.transaction() as connection:
             connection.execute(
                 """
@@ -1049,8 +1269,11 @@ class EvaluationService:
                     normalized["notes"],
                     json.dumps(normalized["tags"], ensure_ascii=False),
                     normalized["confidence"],
-                    json.dumps(output, ensure_ascii=False),
-                    utc_now(),
+                    json.dumps(
+                        {**output, "capabilities": normalized["capabilities"]},
+                        ensure_ascii=False,
+                    ),
+                    created_at,
                 ),
             )
             row = connection.execute(
@@ -1066,6 +1289,34 @@ class EvaluationService:
                     PROMPT_VERSION,
                 ),
             ).fetchone()
+            if row is None:
+                raise RuntimeError("Stored LLM evaluation could not be resolved")
+            connection.execute(
+                """
+                INSERT INTO llm_evaluation_insights(
+                    evaluation_id, previous_score, score_delta, requires_review,
+                    name_conflicts_json, comparison_json, recommendation, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evaluation_id) DO UPDATE SET
+                    previous_score=excluded.previous_score,
+                    score_delta=excluded.score_delta,
+                    requires_review=excluded.requires_review,
+                    name_conflicts_json=excluded.name_conflicts_json,
+                    comparison_json=excluded.comparison_json,
+                    recommendation=excluded.recommendation,
+                    created_at=excluded.created_at
+                """,
+                (
+                    row["id"],
+                    insight["previous_score"],
+                    insight["score_delta"],
+                    int(insight["requires_review"]),
+                    json.dumps(insight["name_conflicts"], ensure_ascii=False),
+                    json.dumps(insight["comparison"], ensure_ascii=False),
+                    insight["recommendation"],
+                    created_at,
+                ),
+            )
         return self.get(row["id"])
 
     def _store_error(
@@ -1110,6 +1361,12 @@ class EvaluationService:
                     PROMPT_VERSION,
                 ),
             ).fetchone()
+            if row is None:
+                raise RuntimeError("Stored LLM evaluation error could not be resolved")
+            connection.execute(
+                "DELETE FROM llm_evaluation_insights WHERE evaluation_id = ?",
+                (row["id"],),
+            )
         return self.get(row["id"])
 
     @staticmethod
@@ -1118,7 +1375,17 @@ class EvaluationService:
         value["category_candidate"] = bool(value.get("category_candidate"))
         value["has_annotation"] = bool(value.get("has_annotation"))
         value["current_content"] = bool(value.get("current_content"))
+        value["previous_score"] = value.get("previous_score")
+        value["score_delta"] = value.get("score_delta")
+        value["requires_review"] = bool(
+            value["requires_review"] if value.get("requires_review") is not None else 1
+        )
         value["dimensions"] = json_value(value.pop("dimensions_json", None), {})
         value["tags"] = json_value(value.pop("tags_json", None), [])
         value["raw"] = json_value(value.pop("raw_json", None), None)
+        value["name_conflicts"] = json_value(
+            value.pop("name_conflicts_json", None), []
+        )
+        value["comparison"] = json_value(value.pop("comparison_json", None), {})
+        value["recommendation"] = value.get("recommendation") or "review"
         return value

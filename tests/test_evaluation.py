@@ -37,6 +37,7 @@ def valid_output(**overrides: Any) -> dict[str, Any]:
         "tags": ["文档", "架构"],
         "confidence": 0.82,
         "dimensions": {name: 8 for name in DIMENSION_WEIGHTS},
+        "capabilities": ["technical documentation", "architecture guides"],
     }
     payload.update(overrides)
     return payload
@@ -296,6 +297,148 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(skill["score_source"], "LLM/codex:default")
         self.assertEqual(skill["annotation_content_hash"], skill["content_hash"])
         self.assertEqual(service.pending(), [])
+
+    def test_equal_re_evaluation_score_is_recorded_without_review_noise(self) -> None:
+        skill = Catalog(self.settings).list_skills()[0]
+        Catalog(self.settings).annotate(skill["id"], score=8.0)
+        with Database(self.settings).transaction() as connection:
+            connection.execute(
+                "UPDATE annotations SET content_hash = 'older-content' WHERE skill_id = ?",
+                (skill["id"],),
+            )
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+
+        run = service.evaluate()
+
+        self.assertEqual(run["proposed"], 0)
+        self.assertEqual(run["unchanged"], 1)
+        result = run["results"][0]
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["previous_score"], 8.0)
+        self.assertEqual(result["score_delta"], 0.0)
+        self.assertEqual(service.status()["proposal_count"], 0)
+        self.assertEqual(service.list(status="proposed"), [])
+        self.assertEqual(service.get(result["id"])["score"], 8.0)
+
+    def test_changed_re_evaluation_score_exposes_previous_score_and_delta(self) -> None:
+        skill = Catalog(self.settings).list_skills()[0]
+        Catalog(self.settings).annotate(skill["id"], score=7.0)
+        with Database(self.settings).transaction() as connection:
+            connection.execute(
+                "UPDATE annotations SET content_hash = 'older-content' WHERE skill_id = ?",
+                (skill["id"],),
+            )
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+
+        run = service.evaluate()
+
+        self.assertEqual(run["proposed"], 1)
+        self.assertEqual(run["unchanged"], 0)
+        result = run["results"][0]
+        self.assertTrue(result["requires_review"])
+        self.assertEqual(result["previous_score"], 7.0)
+        self.assertEqual(result["score_delta"], 1.0)
+
+    def test_new_skill_records_exact_name_conflicts(self) -> None:
+        duplicate_source = init_repo(self.library / "duplicate-source")
+        write_skill(
+            duplicate_source,
+            "docs-skill",
+            "Create another technical documentation workflow.",
+        )
+        commit_all(duplicate_source)
+        registered = SourceManager(self.settings).register(duplicate_source)
+        CatalogScanner(self.settings).scan(registered["id"])
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+
+        result = service.evaluate(source=registered["id"])["results"][0]
+
+        self.assertEqual(len(result["name_conflicts"]), 1)
+        self.assertEqual(result["name_conflicts"][0]["name"], "docs-skill")
+        self.assertEqual(result["name_conflicts"][0]["source_name"], "source")
+        self.assertEqual(result["recommendation"], "review")
+
+    def test_stronger_existing_coverage_is_recorded_as_ignore_advice(self) -> None:
+        existing = Catalog(self.settings).list_skills()[0]
+        Catalog(self.settings).annotate(
+            existing["id"],
+            score=9.0,
+            problem="Create technical documentation and architecture guides.",
+            use_case="Technical documentation and architecture guides.",
+            tags=["technical documentation", "architecture guides"],
+        )
+        new_source = init_repo(self.library / "new-source")
+        write_skill(
+            new_source,
+            "docs-helper",
+            "Create technical documentation and architecture guides quickly.",
+        )
+        commit_all(new_source)
+        registered = SourceManager(self.settings).register(new_source)
+        CatalogScanner(self.settings).scan(registered["id"])
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+
+        run = service.evaluate(source=registered["id"])
+
+        result = run["results"][0]
+        self.assertEqual(run["attention"], 1)
+        self.assertEqual(result["recommendation"], "ignore")
+        self.assertEqual(result["comparison"]["matched_skill_id"], existing["id"])
+        self.assertEqual(result["comparison"]["existing_score"], 9.0)
+        self.assertEqual(result["comparison"]["coverage"], 1.0)
+        self.assertEqual(
+            result["comparison"]["matched_capabilities"],
+            ["technical documentation", "architecture guides"],
+        )
+        self.assertTrue(Catalog(self.settings).get_skill(result["skill_id"])["active"])
+
+    def test_ignore_advice_requires_strictly_stronger_existing_score(self) -> None:
+        existing = Catalog(self.settings).list_skills()[0]
+        Catalog(self.settings).annotate(
+            existing["id"],
+            score=7.0,
+            problem="Create technical documentation and architecture guides.",
+            use_case="Technical documentation and architecture guides.",
+            tags=["technical documentation", "architecture guides"],
+        )
+        new_source = init_repo(self.library / "new-source")
+        write_skill(
+            new_source,
+            "docs-helper",
+            "Create technical documentation and architecture guides quickly.",
+        )
+        commit_all(new_source)
+        registered = SourceManager(self.settings).register(new_source)
+        CatalogScanner(self.settings).scan(registered["id"])
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+
+        result = service.evaluate(source=registered["id"])["results"][0]
+
+        self.assertEqual(result["recommendation"], "review")
+        self.assertEqual(result["comparison"]["existing_score"], 7.0)
+
+    def test_legacy_evaluation_without_insight_uses_safe_defaults(self) -> None:
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+        result = service.evaluate()["results"][0]
+        with Database(self.settings).transaction() as connection:
+            connection.execute(
+                "DELETE FROM llm_evaluation_insights WHERE evaluation_id = ?",
+                (result["id"],),
+            )
+
+        legacy = service.get(result["id"])
+
+        self.assertTrue(legacy["requires_review"])
+        self.assertIsNone(legacy["previous_score"])
+        self.assertEqual(legacy["name_conflicts"], [])
+        self.assertEqual(legacy["comparison"], {})
+        self.assertEqual(legacy["recommendation"], "review")
 
     def test_existing_annotation_requires_explicit_replacement(self) -> None:
         skill = Catalog(self.settings).list_skills()[0]

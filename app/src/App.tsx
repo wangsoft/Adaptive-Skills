@@ -76,6 +76,7 @@ import type {
   LLMProfile,
   LLMProfileProvider,
   LLMAPIMode,
+  LLMEvaluation,
   LLMEvaluationRun,
   LLMProfileTestResult,
   ProjectSummary,
@@ -895,6 +896,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
   const [name, setName] = useState(initialDraft.name);
   const [refreshResult, setRefreshResult] = useState<SourceRefreshAllResult | null>(null);
   const [reconcileResult, setReconcileResult] = useState<SourceReconcileResult | null>(null);
+  const [evaluationResult, setEvaluationResult] = useState<LLMEvaluationRun | null>(null);
   const [refreshHistory, setRefreshHistory] = useState(() => loadSourceRefreshHistory(localStorage, library));
   useEffect(() => {
     saveSourceDraft(localStorage, library, { adding, url, name });
@@ -931,7 +933,12 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
     const confirmed = window.confirm(
       `将使用已配置的大模型评测 ${source.name}。当前有 ${source.pending_evaluation_count} 个待处理 Skill，本次按配置上限执行，可能消耗模型额度。是否继续？`,
     );
-    if (confirmed) void onEvaluate(source.id);
+    if (confirmed) {
+      setEvaluationResult(null);
+      void onEvaluate(source.id).then((result) => {
+        if (result) setEvaluationResult(result);
+      });
+    }
   };
   return (
     <div className="stack gap-lg">
@@ -977,6 +984,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
           )}
         </div>
       )}
+      {evaluationResult && <EvaluationRunSummary run={evaluationResult} />}
       {refreshHistory.length > 0 && (
         <section className="panel source-refresh-history">
           <div className="panel-heading"><div><span className="eyebrow">Local activity</span><h3>最近全部更新记录</h3></div><span className="badge neutral">保留 {refreshHistory.length} 次</span></div>
@@ -1009,6 +1017,104 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
         ))}
       </section>
     </div>
+  );
+}
+
+function signedScore(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function EvaluationRunSummary({ run }: { run: LLMEvaluationRun }) {
+  const noteworthy = run.results.filter((item) =>
+    item.status === "error" ||
+    (item.score_delta != null && item.score_delta !== 0) ||
+    (item.previous_score == null && item.name_conflicts.length > 0) ||
+    item.recommendation === "ignore"
+  );
+  return (
+    <div className={`refresh-summary ${run.failed ? "with-failures" : ""}`} role="status">
+      <div className="refresh-summary-heading">
+        {run.failed ? <AlertTriangle size={17} /> : <Check size={17} />}
+        <div>
+          <strong>本次评测已完成</strong>
+          <p>已处理 {run.requested} 个 · {run.proposed} 个进入审核 · {run.unchanged} 个评分未变化（已记录） · {run.attention} 个提醒 · {run.failed} 个失败</p>
+        </div>
+      </div>
+      {noteworthy.length > 0 && (
+        <div className="evaluation-run-details">
+          {noteworthy.slice(0, 8).map((item) => (
+            <div className="evaluation-run-detail" key={item.id}>
+              <strong>{item.skill_name}</strong>
+              <div>
+                {item.status === "error" && <span>{item.error || "评测失败"}</span>}
+                {item.previous_score != null && item.score != null && item.score_delta != null && item.score_delta !== 0 && (
+                  <span>评分 {item.previous_score.toFixed(1)} → {item.score.toFixed(1)}（{signedScore(item.score_delta)}）</span>
+                )}
+                {item.previous_score == null && item.name_conflicts.length > 0 && (
+                  <span>名称与 {item.name_conflicts.map((conflict) => `${conflict.name} / ${conflict.source_name}`).join("、")} 冲突</span>
+                )}
+                {item.recommendation === "ignore" && (
+                  <span>建议忽略：现有 {item.comparison.matched_skill_name || "Skill"} 已完整覆盖且评分更高</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {noteworthy.length > 8 && <small>另有 {noteworthy.length - 8} 项，请在 LLM 评测页查看。</small>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvaluationProposalCard({ proposal, busy, onApply, onReject }: {
+  proposal: LLMEvaluation;
+  busy: string | null;
+  onApply: (evaluationId: string, replaceExisting: boolean) => void;
+  onReject: (evaluationId: string) => void;
+}) {
+  const comparison = proposal.comparison;
+  return (
+    <article className={`proposal-card ${proposal.recommendation === "ignore" ? "ignore-recommended" : ""}`}>
+      <div className="proposal-heading">
+        <div><strong>{proposal.skill_name}</strong><span>{proposal.source_name} · {proposal.provider}{proposal.model ? `/${proposal.model}` : ""}</span></div>
+        <div className="proposal-score"><strong>{proposal.score != null ? proposal.score.toFixed(1) : "—"}</strong><small>/ 10 质量分</small></div>
+      </div>
+      {proposal.previous_score != null && proposal.score != null && proposal.score_delta != null && (
+        <div className="proposal-score-change">
+          <span>评分变化</span>
+          <strong>{proposal.previous_score.toFixed(1)} → {proposal.score.toFixed(1)}</strong>
+          <i className={`badge ${proposal.score_delta > 0 ? "success" : "warning"}`}>{signedScore(proposal.score_delta)}</i>
+        </div>
+      )}
+      <div className="proposal-category"><span>{proposal.category_l1}</span><ArrowRight size={13} /><span>{proposal.category_l2}</span>{proposal.category_candidate && <i className="badge warning">新二级分类候选</i>}</div>
+      <p>{proposal.problem}</p>
+      <small>{proposal.use_case}</small>
+      {proposal.name_conflicts.length > 0 && (
+        <div className="proposal-insight name-conflict">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>发现同名 Skill</strong>
+            <p>{proposal.name_conflicts.map((conflict) => `${conflict.name}（${conflict.source_name}${conflict.score != null ? `，${conflict.score.toFixed(1)} 分` : "，未评分"}）`).join("；")}</p>
+            <small>请先确认它们是否是重复来源、分支版本或不同实现。</small>
+          </div>
+        </div>
+      )}
+      {proposal.recommendation === "ignore" && (
+        <div className="proposal-insight ignore-advice">
+          <ShieldCheck size={15} />
+          <div>
+            <strong>建议忽略此 Skill</strong>
+            <p>现有 {comparison.matched_skill_name || "Skill"}（{comparison.matched_source_name || "未知来源"}，{comparison.existing_score?.toFixed(1) ?? "—"} 分）在本地能力比对中完整覆盖本 Skill，且评分高于当前 {proposal.score?.toFixed(1) ?? "—"} 分。</p>
+            {comparison.matched_capabilities?.length ? <small>覆盖能力：{comparison.matched_capabilities.join("、")}</small> : null}
+            <small>这是审核建议，已写入评测记录；系统不会自动停用、删除或隐藏 Skill。</small>
+          </div>
+        </div>
+      )}
+      <div className="proposal-actions">
+        <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => onReject(proposal.id)}>{busy === `evaluation-reject-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}拒绝提案</button>
+        <button className="button primary compact" disabled={Boolean(busy) || !proposal.current_content} onClick={() => onApply(proposal.id, proposal.has_annotation)}>{busy === `evaluation-apply-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{proposal.recommendation === "ignore" ? "仍然应用" : proposal.has_annotation ? "替换现有整理" : "应用提案"}</button>
+      </div>
+    </article>
   );
 }
 
@@ -1172,15 +1278,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
         <div className="taxonomy-chips">{snapshot.llm.taxonomy.level_one.map((category) => <span key={category}>{category}</span>)}</div>
       </section>
 
-      {lastRun && (
-        <div className={`refresh-summary ${lastRun.failed ? "with-failures" : ""}`} role="status">
-          <div className="refresh-summary-heading">
-            {lastRun.failed ? <AlertTriangle size={17} /> : <Check size={17} />}
-            <div><strong>本次评测已完成</strong><p>已处理 {lastRun.requested} 个 · {lastRun.proposed} 个生成提案 · {lastRun.failed} 个失败</p></div>
-          </div>
-          {lastRun.failed > 0 && <div className="refresh-failures">{lastRun.results.filter((item) => item.status === "error").slice(0, 5).map((item) => <p key={item.id}><strong>{item.skill_name}</strong><span title={item.error || undefined}>{item.error || "评测失败"}</span></p>)}{lastRun.failed > 5 && <p><strong>其余失败</strong><span>还有 {lastRun.failed - 5} 项，可在下方最近失败记录中查看</span></p>}</div>}
-        </div>
-      )}
+      {lastRun && <EvaluationRunSummary run={lastRun} />}
 
       {pendingSources.length > 0 && (
         <section className="panel pending-sources">
@@ -1199,7 +1297,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
 
       <section className="panel proposal-panel">
         <div className="panel-heading"><div><span className="eyebrow">Human review gate</span><h3>评测提案</h3></div><span className="badge neutral">{snapshot.llm.proposals.length} 项</span></div>
-        {snapshot.llm.proposals.length ? <div className="proposal-list">{snapshot.llm.proposals.map((proposal) => <article className="proposal-card" key={proposal.id}><div className="proposal-heading"><div><strong>{proposal.skill_name}</strong><span>{proposal.source_name} · {proposal.provider}{proposal.model ? `/${proposal.model}` : ""}</span></div><div className="proposal-score"><strong>{proposal.score != null ? proposal.score.toFixed(1) : "—"}</strong><small>/ 10 质量分</small></div></div><div className="proposal-category"><span>{proposal.category_l1}</span><ArrowRight size={13} /><span>{proposal.category_l2}</span>{proposal.category_candidate && <i className="badge warning">新二级分类候选</i>}</div><p>{proposal.problem}</p><small>{proposal.use_case}</small><div className="proposal-actions"><button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onReject(proposal.id)}>{busy === `evaluation-reject-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}拒绝</button><button className="button primary compact" disabled={Boolean(busy) || !proposal.current_content} onClick={() => apply(proposal.id, proposal.has_annotation)}>{busy === `evaluation-apply-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{proposal.has_annotation ? "替换现有整理" : "应用提案"}</button></div></article>)}</div> : <div className="history-empty"><Sparkles size={20} /><span>还没有待审核的 LLM 评测提案。</span></div>}
+        {snapshot.llm.proposals.length ? <div className="proposal-list">{snapshot.llm.proposals.map((proposal) => <EvaluationProposalCard proposal={proposal} busy={busy} onApply={apply} onReject={(id) => void onReject(id)} key={proposal.id} />)}</div> : <div className="history-empty"><Sparkles size={20} /><span>还没有待审核的 LLM 评测提案。</span></div>}
       </section>
     </div>
   );

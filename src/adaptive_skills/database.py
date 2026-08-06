@@ -10,7 +10,7 @@ from typing import Any, Iterator
 from .config import Settings
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def utc_now() -> str:
@@ -257,6 +257,25 @@ class Database:
                 ALTER TABLE llm_evaluations_v4 RENAME TO llm_evaluations;
                 """
             )
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS llm_evaluation_insights (
+                evaluation_id TEXT PRIMARY KEY
+                    REFERENCES llm_evaluations(id) ON DELETE CASCADE,
+                previous_score REAL,
+                score_delta REAL,
+                requires_review INTEGER NOT NULL DEFAULT 1
+                    CHECK(requires_review IN (0, 1)),
+                name_conflicts_json TEXT NOT NULL DEFAULT '[]',
+                comparison_json TEXT NOT NULL DEFAULT '{}',
+                recommendation TEXT NOT NULL DEFAULT 'review'
+                    CHECK(recommendation IN ('review', 'ignore')),
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_llm_insights_review
+                ON llm_evaluation_insights(requires_review, recommendation);
+            """
+        )
         connection.execute(
             """
             UPDATE annotations

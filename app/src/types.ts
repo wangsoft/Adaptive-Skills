@@ -106,6 +106,26 @@ export interface LLMEvaluation {
   error: string | null;
   has_annotation: boolean;
   current_content: boolean;
+  previous_score: number | null;
+  score_delta: number | null;
+  requires_review: boolean;
+  name_conflicts: Array<{
+    id: string;
+    name: string;
+    source_name: string;
+    score: number | null;
+  }>;
+  comparison: {
+    relation?: "overlap" | "existing_covers";
+    matched_skill_id?: string;
+    matched_skill_name?: string;
+    matched_source_name?: string;
+    existing_score?: number;
+    coverage?: number;
+    matched_capabilities?: string[];
+    reason?: string;
+  };
+  recommendation: "review" | "ignore";
   created_at: string;
 }
 
@@ -139,6 +159,8 @@ export interface LLMEvaluationRun {
   model: string | null;
   requested: number;
   proposed: number;
+  unchanged: number;
+  attention: number;
   failed: number;
   results: LLMEvaluation[];
 }

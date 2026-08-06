@@ -83,7 +83,7 @@ def main() -> int:
         reconciled = _run(core, library, "source", "reconcile")
         snapshot = _run(core, library, "app", "snapshot", "--limit", "10")
         project_status = _run(core, library, "project", "status", str(project))
-        if initialized.get("schema_version") != 5:
+        if initialized.get("schema_version") != 6:
             raise RuntimeError("The packaged core returned an unexpected schema version")
         if snapshot.get("contract_version") != 6:
             raise RuntimeError("The packaged core returned an unexpected app contract")
