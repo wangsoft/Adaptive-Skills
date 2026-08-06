@@ -235,6 +235,10 @@ def _cmd_llm_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:
     )
 
 
+def _cmd_llm_clear_errors(arguments: argparse.Namespace) -> dict[str, int]:
+    return EvaluationService(_settings(arguments)).clear_errors()
+
+
 def _cmd_llm_apply(arguments: argparse.Namespace) -> dict[str, Any]:
     return EvaluationService(_settings(arguments)).apply(
         arguments.evaluation, replace_existing=arguments.replace_existing
@@ -533,6 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     llm_list.add_argument("--limit", type=int, default=100)
     _handler(llm_list, _cmd_llm_list)
+    llm_clear_errors = llm_commands.add_parser(
+        "clear-errors", help="Delete all failed LLM evaluation records"
+    )
+    _handler(llm_clear_errors, _cmd_llm_clear_errors)
     llm_apply = llm_commands.add_parser("apply")
     llm_apply.add_argument("evaluation")
     llm_apply.add_argument("--replace-existing", action="store_true")

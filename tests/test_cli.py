@@ -121,6 +121,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(configured["config"]["model"], "configured-model")
             shown = run_cli(library, "llm", "config", "show")
             self.assertEqual(shown["config"]["max_per_run"], 4)
+            self.assertEqual(
+                run_cli(library, "llm", "clear-errors"), {"deleted": 0}
+            )
 
             compatible = run_cli(
                 library,

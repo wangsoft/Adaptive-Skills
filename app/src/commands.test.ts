@@ -11,6 +11,7 @@ import {
   sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
+  llmClearErrorsArgs,
   llmConfigArgs,
   llmEvaluateArgs,
   llmProfileSaveArgs,
@@ -75,6 +76,7 @@ describe("desktop command contract", () => {
     expect(llmEvaluateArgs("source-id")).toEqual([
       "llm", "evaluate", "--source", "source-id",
     ]);
+    expect(llmClearErrorsArgs()).toEqual(["llm", "clear-errors"]);
     expect(llmReviewArgs("apply", "evaluation-id", true)).toEqual([
       "llm", "apply", "evaluation-id", "--replace-existing",
     ]);

@@ -12,7 +12,7 @@ from unittest.mock import patch
 from adaptive_skills.catalog import Catalog
 from adaptive_skills.config import Settings
 from adaptive_skills.database import Database
-from adaptive_skills.errors import ConflictError, ValidationError
+from adaptive_skills.errors import ConflictError, NotFoundError, ValidationError
 from adaptive_skills.evaluation import (
     CLIProviderRunner,
     DIMENSION_WEIGHTS,
@@ -331,6 +331,24 @@ class EvaluationTests(unittest.TestCase):
         recent_errors = service.status()["recent_errors"]
         self.assertEqual(recent_errors[0]["id"], result["results"][0]["id"])
         self.assertIn("Unknown core category", recent_errors[0]["error"])
+
+    def test_clear_errors_preserves_non_error_evaluations(self) -> None:
+        service = EvaluationService(self.settings, runner=FakeRunner(valid_output()))
+        service.configure(provider="codex")
+        proposal = service.evaluate()["results"][0]
+        skill = Catalog(self.settings).get_skill(proposal["skill_id"])
+        stale_skill = {**skill, "content_hash": "older-content-hash"}
+        failure = service._store_error(
+            stale_skill, service.config_store.load(), "temporary failure"
+        )
+
+        result = service.clear_errors()
+
+        self.assertEqual(result, {"deleted": 1})
+        self.assertEqual(service.list(status="error"), [])
+        self.assertEqual(service.get(proposal["id"])["status"], "proposed")
+        with self.assertRaises(NotFoundError):
+            service.get(failure["id"])
 
     def test_unexpected_llm_fields_are_recorded_as_error(self) -> None:
         service = EvaluationService(

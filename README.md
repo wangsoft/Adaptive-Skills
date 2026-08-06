@@ -282,6 +282,7 @@ Homebrew 等常见目录中发现 Codex/Claude CLI，并把解析到的路径显
 位置可以通过 `ADAPTIVE_SKILLS_CODEX_EXECUTABLE` 或
 `ADAPTIVE_SKILLS_CLAUDE_EXECUTABLE` 指定绝对路径。无法发现 CLI 时，界面会暂停评测按钮；
 每次评测完成后会显示处理、提案和失败数量，最近的失败原因也会保留在评测页面中。
+“清空失败记录”只删除失败结果，不会影响待审核提案、已应用结果或待评测队列。
 
 命令行配置和查看状态：
 
@@ -290,6 +291,7 @@ adaptive-skills --library /Users/leowang/skills llm config set \
   --provider codex --max-per-run 20
 adaptive-skills --library /Users/leowang/skills llm status
 adaptive-skills --library /Users/leowang/skills llm pending --source SOURCE_ID
+adaptive-skills --library /Users/leowang/skills llm clear-errors
 ```
 
 增加一个 OpenAI-compatible 连接时，密钥只能通过桌面 App 的密码框，或一次性进程环境变量

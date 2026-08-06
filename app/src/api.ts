@@ -11,6 +11,7 @@ import {
   sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
+  llmClearErrorsArgs,
   llmConfigArgs,
   llmEvaluateArgs,
   llmProfileSaveArgs,
@@ -178,6 +179,8 @@ export const api = {
     ]),
   evaluateSource: (library: string, sourceId: string) =>
     runCommand<LLMEvaluationRun>(library, llmEvaluateArgs(sourceId)),
+  clearLLMErrors: (library: string) =>
+    runCommand<{ deleted: number }>(library, llmClearErrorsArgs()),
   applyEvaluation: (
     library: string,
     evaluationId: string,

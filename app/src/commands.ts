@@ -116,6 +116,10 @@ export function llmEvaluateArgs(sourceId: string): string[] {
   return ["llm", "evaluate", "--source", sourceId];
 }
 
+export function llmClearErrorsArgs(): string[] {
+  return ["llm", "clear-errors"];
+}
+
 export function llmReviewArgs(
   action: "apply" | "reject",
   evaluationId: string,

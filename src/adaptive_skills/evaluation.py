@@ -793,6 +793,13 @@ class EvaluationService:
             ).fetchall()
         return [self._decode(dict(row)) for row in rows]
 
+    def clear_errors(self) -> dict[str, int]:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "DELETE FROM llm_evaluations WHERE status = 'error'"
+            )
+        return {"deleted": max(cursor.rowcount, 0)}
+
     def apply(self, evaluation_id: str, *, replace_existing: bool = False) -> dict[str, Any]:
         proposal = self.get(evaluation_id)
         if proposal["status"] != "proposed":

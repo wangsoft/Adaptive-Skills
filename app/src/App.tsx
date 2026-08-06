@@ -446,6 +446,7 @@ function App() {
                 onDelete={(id) => runAction("llm-profile-delete", () => api.deleteLLMProfile(library, id))}
                 onTest={testLLMProfile}
                 onEvaluate={runEvaluation}
+                onClearErrors={() => runAction("llm-errors-clear", () => api.clearLLMErrors(library))}
                 onApply={(id, replaceExisting) =>
                   runAction(`evaluation-apply-${id}`, () =>
                     api.applyEvaluation(library, id, replaceExisting),
@@ -1023,7 +1024,7 @@ interface LLMProfileFormValue {
   activate: boolean;
 }
 
-function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, onDelete, onTest, onEvaluate, onApply, onReject }: {
+function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, onDelete, onTest, onEvaluate, onClearErrors, onApply, onReject }: {
   snapshot: AppSnapshot;
   busy: string | null;
   onSaveProfile: (profile: LLMProfileFormValue, secret?: string) => Promise<boolean>;
@@ -1032,6 +1033,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   onDelete: (profileId: string) => Promise<boolean>;
   onTest: (profileId: string) => Promise<LLMProfileTestResult | null>;
   onEvaluate: (sourceId: string) => Promise<LLMEvaluationRun | null>;
+  onClearErrors: () => Promise<boolean>;
   onApply: (evaluationId: string, replaceExisting: boolean) => Promise<boolean>;
   onReject: (evaluationId: string) => Promise<boolean>;
 }) {
@@ -1113,6 +1115,10 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
       window.alert(`连接测试通过${detail}`);
     });
   };
+  const clearErrors = async () => {
+    if (!window.confirm(`确定清空全部失败记录？当前列表显示最近 ${snapshot.llm.recent_errors.length} 条。待审核提案和已应用结果不会受到影响，这些 Skill 仍可重新评测。`)) return;
+    if (await onClearErrors()) setLastRun(null);
+  };
   const apply = (evaluationId: string, replaceExisting: boolean) => {
     if (replaceExisting && !window.confirm("此操作会替换现有人工或 Arena 整理结果。确认继续？")) return;
     void onApply(evaluationId, replaceExisting);
@@ -1185,7 +1191,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
 
       {snapshot.llm.recent_errors.length > 0 && (
         <section className="panel evaluation-errors">
-          <div className="panel-heading"><div><span className="eyebrow">Recent failures</span><h3>最近评测失败</h3></div><span className="badge warning">最近 {snapshot.llm.recent_errors.length} 项</span></div>
+          <div className="panel-heading"><div><span className="eyebrow">Recent failures</span><h3>最近评测失败</h3></div><div className="button-row"><span className="badge warning">最近 {snapshot.llm.recent_errors.length} 项</span><button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void clearErrors()}>{busy === "llm-errors-clear" ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}清空失败记录</button></div></div>
           <p className="muted">失败记录会保留，方便定位连接、模型输出或分类校验问题；Skill 内容变化或再次评测后会写入新结果。</p>
           <div className="evaluation-error-list">{snapshot.llm.recent_errors.map((item) => <div className="evaluation-error-row" key={item.id}><div><strong>{item.skill_name}</strong><span>{item.source_name} · {formatDate(item.created_at)}</span></div><p title={item.error || undefined}>{item.error || "评测失败"}</p></div>)}</div>
         </section>
@@ -1542,7 +1548,7 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
 }
 
 function ActivityToast({ label }: { label: string }) {
-  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "source-reconcile": "正在发现并扫描手动加入的 Git 仓库…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
+  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "source-reconcile": "正在发现并扫描手动加入的 Git 仓库…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", "llm-errors-clear": "正在清空失败评测记录…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
   const message = messages[label] || (label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
   return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
 }
