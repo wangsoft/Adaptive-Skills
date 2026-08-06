@@ -31,6 +31,7 @@ import type {
   LLMAPIMode,
   LLMEvaluation,
   LLMEvaluationRun,
+  LLMProfileTestResult,
   ProjectSummary,
   BootstrapCandidate,
   BootstrapDiscovery,
@@ -172,7 +173,7 @@ export const api = {
   deleteLLMProfile: (library: string, profileId: string) =>
     runCommand<LLMStatus>(library, ["llm", "profile", "delete", profileId]),
   testLLMProfile: (library: string, profileId: string) =>
-    runCommand<{ ok: boolean; profile_id: string }>(library, [
+    runCommand<LLMProfileTestResult>(library, [
       "llm", "profile", "test", profileId,
     ]),
   evaluateSource: (library: string, sourceId: string) =>

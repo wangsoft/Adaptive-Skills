@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from adaptive_skills.catalog import Catalog
 from adaptive_skills.config import Settings
 from adaptive_skills.database import Database
 from adaptive_skills.errors import ConflictError, ValidationError
 from adaptive_skills.evaluation import (
+    CLIProviderRunner,
     DIMENSION_WEIGHTS,
     EvaluationService,
     OpenAICompatibleRunner,
@@ -324,6 +328,9 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["results"][0]["status"], "error")
         self.assertIn("Unknown core category", result["results"][0]["error"])
+        recent_errors = service.status()["recent_errors"]
+        self.assertEqual(recent_errors[0]["id"], result["results"][0]["id"])
+        self.assertIn("Unknown core category", recent_errors[0]["error"])
 
     def test_unexpected_llm_fields_are_recorded_as_error(self) -> None:
         service = EvaluationService(
@@ -341,6 +348,59 @@ class EvaluationTests(unittest.TestCase):
         snapshot = Taxonomy(Database(self.settings)).snapshot()
         self.assertEqual(snapshot["level_one"], list(CORE_L1))
         self.assertEqual(snapshot["policy"]["level_two"], "reuse-or-propose")
+
+    def test_cli_discovery_finds_latest_nvm_install_without_shell_path(self) -> None:
+        home = Path(self.temporary.name) / "home"
+        older = home / ".nvm/versions/node/v20.1.0/bin/codex"
+        latest = home / ".nvm/versions/node/v24.11.1/bin/codex"
+        for executable in (older, latest):
+            executable.parent.mkdir(parents=True, exist_ok=True)
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+
+        with (
+            patch("adaptive_skills.evaluation.Path.home", return_value=home),
+            patch("adaptive_skills.evaluation.shutil.which", return_value=None),
+        ):
+            self.assertEqual(
+                CLIProviderRunner.resolve_executable("codex"), str(latest)
+            )
+            self.assertTrue(CLIProviderRunner.availability()["codex"])
+
+    def test_cli_execution_adds_discovered_binary_directory_to_path(self) -> None:
+        executable = Path(self.temporary.name) / "node/bin/codex"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        executable.chmod(0o755)
+        completed = subprocess.CompletedProcess([str(executable)], 0, "{}", "")
+
+        with patch(
+            "adaptive_skills.evaluation.subprocess.run", return_value=completed
+        ) as run:
+            CLIProviderRunner._execute(
+                [str(executable)],
+                prompt="evaluate",
+                cwd=Path(self.temporary.name),
+                timeout=30,
+            )
+
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(
+            environment["PATH"].split(os.pathsep)[0], str(executable.parent)
+        )
+
+    def test_missing_cli_fails_before_creating_per_skill_errors(self) -> None:
+        service = EvaluationService(self.settings)
+        service.configure(provider="codex")
+
+        with (
+            patch.object(CLIProviderRunner, "resolve_executable", return_value=None),
+            self.assertRaisesRegex(ValidationError, "could not be discovered"),
+        ):
+            service.evaluate()
+
+        self.assertEqual(service.list(status="error"), [])
+
 
 class ScoreValidationTests(unittest.TestCase):
     def test_human_quality_score_is_limited_to_ten(self) -> None:

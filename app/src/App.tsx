@@ -76,6 +76,8 @@ import type {
   LLMProfile,
   LLMProfileProvider,
   LLMAPIMode,
+  LLMEvaluationRun,
+  LLMProfileTestResult,
   ProjectSummary,
   AuditFinding,
   AuditReviewStatus,
@@ -271,6 +273,39 @@ function App() {
     }
   };
 
+  const runEvaluation = async (sourceId: string): Promise<LLMEvaluationRun | null> => {
+    setBusy(`evaluate-${sourceId}`);
+    setError(null);
+    try {
+      const result = await api.evaluateSource(library, sourceId);
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const testLLMProfile = async (profileId: string): Promise<LLMProfileTestResult | null> => {
+    setBusy("llm-profile-test");
+    setError(null);
+    try {
+      const result = await api.testLLMProfile(library, profileId);
+      await loadSnapshot();
+      if (!result.ok) {
+        setError("没有检测到该连接所需的本地 CLI，请检查安装位置或改用 API 连接。");
+      }
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const addAndScanSource = (url: string, name?: string): Promise<boolean> =>
     runAction("source-add", async () => {
       const added = await api.addSource(library, url, name);
@@ -389,10 +424,11 @@ function App() {
                     await api.scan(library, id);
                   })
                 }
-                llmEnabled={snapshot.llm.config.provider !== "disabled"}
-                onEvaluate={(id) =>
-                  runAction(`evaluate-${id}`, () => api.evaluateSource(library, id))
-                }
+                llmEnabled={Boolean(
+                  snapshot.llm.active_profile &&
+                  snapshot.llm.availability[snapshot.llm.active_profile.provider]
+                )}
+                onEvaluate={runEvaluation}
               />
             )}
             {view === "evaluation" && (
@@ -408,10 +444,8 @@ function App() {
                 onActivate={(id) => runAction("llm-profile-activate", () => api.activateLLMProfile(library, id))}
                 onDisable={() => runAction("llm-profile-disable", () => api.configureLLM(library, "disabled", "", 300, 20))}
                 onDelete={(id) => runAction("llm-profile-delete", () => api.deleteLLMProfile(library, id))}
-                onTest={(id) => runAction("llm-profile-test", () => api.testLLMProfile(library, id))}
-                onEvaluate={(id) =>
-                  runAction(`evaluate-${id}`, () => api.evaluateSource(library, id))
-                }
+                onTest={testLLMProfile}
+                onEvaluate={runEvaluation}
                 onApply={(id, replaceExisting) =>
                   runAction(`evaluation-apply-${id}`, () =>
                     api.applyEvaluation(library, id, replaceExisting),
@@ -852,7 +886,7 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
   onRefreshAll: () => Promise<SourceRefreshAllResult | null>;
   onSetPolicy: (id: string, policy: SourceUpdatePolicy) => Promise<boolean>;
   llmEnabled: boolean;
-  onEvaluate: (id: string) => Promise<boolean>;
+  onEvaluate: (id: string) => Promise<LLMEvaluationRun | null>;
 }) {
   const initialDraft = useMemo(() => loadSourceDraft(localStorage, library), [library]);
   const [adding, setAdding] = useState(initialDraft.adding);
@@ -996,8 +1030,8 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   onActivate: (profileId: string) => Promise<boolean>;
   onDisable: () => Promise<boolean>;
   onDelete: (profileId: string) => Promise<boolean>;
-  onTest: (profileId: string) => Promise<boolean>;
-  onEvaluate: (sourceId: string) => Promise<boolean>;
+  onTest: (profileId: string) => Promise<LLMProfileTestResult | null>;
+  onEvaluate: (sourceId: string) => Promise<LLMEvaluationRun | null>;
   onApply: (evaluationId: string, replaceExisting: boolean) => Promise<boolean>;
   onReject: (evaluationId: string) => Promise<boolean>;
 }) {
@@ -1018,8 +1052,10 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   const [apiKey, setApiKey] = useState("");
   const [timeout, setTimeoutValue] = useState(initialDraft.timeout);
   const [maxPerRun, setMaxPerRun] = useState(initialDraft.maxPerRun);
+  const [lastRun, setLastRun] = useState<LLMEvaluationRun | null>(null);
   const pendingSources = snapshot.sources.filter((source) => source.pending_evaluation_count > 0);
   const active = snapshot.llm.active_profile;
+  const activeAvailable = Boolean(active && snapshot.llm.availability[active.provider]);
   const profileDraft = { open: showForm, editingId, profileId, name, provider, model, baseUrl, apiMode, timeout, maxPerRun };
   const hasDraft = hasLLMProfileDraft(profileDraft);
 
@@ -1059,7 +1095,23 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
     const confirmed = window.confirm(
       `将调用 ${active?.name || "当前模型"} 评测 ${source.name}。单次最多处理 ${current.max_per_run} 个 Skill，可能消耗模型额度。是否继续？`,
     );
-    if (confirmed) void onEvaluate(source.id);
+    if (confirmed) {
+      setLastRun(null);
+      void onEvaluate(source.id).then((result) => {
+        if (result) setLastRun(result);
+      });
+    }
+  };
+  const testProfile = (profile: LLMProfile) => {
+    if (
+      profile.provider === "openai-compatible" &&
+      !window.confirm("连接测试会访问该服务的 /models 接口，是否继续？")
+    ) return;
+    void onTest(profile.id).then((result) => {
+      if (!result?.ok) return;
+      const detail = result.executable ? `\n${result.executable}` : "";
+      window.alert(`连接测试通过${detail}`);
+    });
   };
   const apply = (evaluationId: string, replaceExisting: boolean) => {
     if (replaceExisting && !window.confirm("此操作会替换现有人工或 Arena 整理结果。确认继续？")) return;
@@ -1077,12 +1129,18 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
             const available = snapshot.llm.availability[profile.provider];
             return <article className={`llm-profile-card ${selected ? "active" : ""}`} key={profile.id}>
               <div><span className="eyebrow">{profile.provider}</span><h4>{profile.name}</h4><p>{profile.model || "默认模型"}{profile.base_url ? ` · ${profile.base_url}` : ""}</p></div>
-              <div className="llm-profile-state"><span className={selected ? "badge success" : "badge neutral"}>{selected ? "当前使用" : available ? "可用" : "未检测到"}</span>{profile.provider === "openai-compatible" && <small>{profile.credential_configured ? "已配置凭据" : "无凭据 / 本地服务"}</small>}</div>
-              <div className="profile-actions"><button className="text-button" disabled={Boolean(busy)} onClick={() => editProfile(profile)}>编辑</button>{profile.provider === "openai-compatible" && <button className="text-button" disabled={Boolean(busy)} onClick={() => { if (!window.confirm("连接测试会访问该服务的 /models 接口，是否继续？")) return; void onTest(profile.id).then((ok) => { if (ok) window.alert("连接测试通过"); }); }}>测试</button>}{!selected && <button className="text-button" disabled={Boolean(busy)} onClick={() => void onActivate(profile.id)}>启用</button>}<button className="text-button danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`删除模型连接“${profile.name}”？项目评测记录会保留。`)) void onDelete(profile.id); }}><Trash2 size={13} />删除</button></div>
+              <div className="llm-profile-state">
+                <span className={`badge ${available ? (selected ? "success" : "neutral") : "warning"}`}>{selected ? (available ? "当前使用" : "当前不可用") : available ? "可用" : "未检测到"}</span>
+                {profile.provider === "openai-compatible"
+                  ? <small>{profile.credential_configured ? "已配置凭据" : "无凭据 / 本地服务"}</small>
+                  : <small title={snapshot.llm.executables[profile.provider] || undefined}>{snapshot.llm.executables[profile.provider] || "未找到 CLI"}</small>}
+              </div>
+              <div className="profile-actions"><button className="text-button" disabled={Boolean(busy)} onClick={() => editProfile(profile)}>编辑</button><button className="text-button" disabled={Boolean(busy)} onClick={() => testProfile(profile)}>测试</button>{!selected && <button className="text-button" disabled={Boolean(busy)} onClick={() => void onActivate(profile.id)}>启用</button>}<button className="text-button danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`删除模型连接“${profile.name}”？项目评测记录会保留。`)) void onDelete(profile.id); }}><Trash2 size={13} />删除</button></div>
             </article>;
           })}
           {!current.profiles.length && <div className="history-empty"><Settings2 size={20} /><span>还没有模型连接。添加一个连接后才能对新 Skill 生成分类和评分提案。</span></div>}
         </div>
+        {active && !activeAvailable && <div className="bootstrap-notice warning"><AlertTriangle size={15} /><span>当前连接“{active.name}”不可用，评测按钮已暂停。桌面 App 会自动查找 NVM、FNM、Volta、Homebrew 等常见安装目录；也可以改用 OpenAI-compatible API 连接。</span></div>}
         {showForm && <form className="evaluation-profile-form" onSubmit={(event) => void save(event)}>
           <div className="profile-form-heading"><div><strong>{editingId ? "编辑连接" : "新建连接"}</strong><small>非密钥字段会自动保存为本地草稿；API Key 切换页面后需重新输入。</small></div><div className="button-row"><button type="button" className="text-button danger" onClick={discardForm}>清空草稿</button><button type="button" className="icon-button" aria-label="收起连接表单" onClick={() => setShowForm(false)}><X size={15} /></button></div></div>
           <label className="input-field"><span>连接 ID</span><input required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" value={profileId} disabled={Boolean(editingId)} onChange={(event) => setProfileId(event.target.value)} placeholder="office-model" /></label>
@@ -1108,10 +1166,28 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
         <div className="taxonomy-chips">{snapshot.llm.taxonomy.level_one.map((category) => <span key={category}>{category}</span>)}</div>
       </section>
 
+      {lastRun && (
+        <div className={`refresh-summary ${lastRun.failed ? "with-failures" : ""}`} role="status">
+          <div className="refresh-summary-heading">
+            {lastRun.failed ? <AlertTriangle size={17} /> : <Check size={17} />}
+            <div><strong>本次评测已完成</strong><p>已处理 {lastRun.requested} 个 · {lastRun.proposed} 个生成提案 · {lastRun.failed} 个失败</p></div>
+          </div>
+          {lastRun.failed > 0 && <div className="refresh-failures">{lastRun.results.filter((item) => item.status === "error").slice(0, 5).map((item) => <p key={item.id}><strong>{item.skill_name}</strong><span title={item.error || undefined}>{item.error || "评测失败"}</span></p>)}{lastRun.failed > 5 && <p><strong>其余失败</strong><span>还有 {lastRun.failed - 5} 项，可在下方最近失败记录中查看</span></p>}</div>}
+        </div>
+      )}
+
       {pendingSources.length > 0 && (
         <section className="panel pending-sources">
           <div className="panel-heading"><div><span className="eyebrow">Evaluation queue</span><h3>按来源评测</h3></div></div>
-          <div className="pending-source-list">{pendingSources.map((source) => <div className="pending-source-row" key={source.id}><div><strong>{source.name}</strong><span>{source.pending_evaluation_count} 个待评测 Skill</span></div><button className="button secondary compact" disabled={Boolean(busy) || current.provider === "disabled"} onClick={() => evaluate(source)}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}开始评测</button></div>)}</div>
+          <div className="pending-source-list">{pendingSources.map((source) => <div className="pending-source-row" key={source.id}><div><strong>{source.name}</strong><span>{source.pending_evaluation_count} 个待评测 Skill</span></div><button className="button secondary compact" disabled={Boolean(busy) || current.provider === "disabled" || !activeAvailable} title={activeAvailable ? "调用当前模型生成评测提案" : "当前模型连接不可用"} onClick={() => evaluate(source)}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}开始评测</button></div>)}</div>
+        </section>
+      )}
+
+      {snapshot.llm.recent_errors.length > 0 && (
+        <section className="panel evaluation-errors">
+          <div className="panel-heading"><div><span className="eyebrow">Recent failures</span><h3>最近评测失败</h3></div><span className="badge warning">最近 {snapshot.llm.recent_errors.length} 项</span></div>
+          <p className="muted">失败记录会保留，方便定位连接、模型输出或分类校验问题；Skill 内容变化或再次评测后会写入新结果。</p>
+          <div className="evaluation-error-list">{snapshot.llm.recent_errors.map((item) => <div className="evaluation-error-row" key={item.id}><div><strong>{item.skill_name}</strong><span>{item.source_name} · {formatDate(item.created_at)}</span></div><p title={item.error || undefined}>{item.error || "评测失败"}</p></div>)}</div>
         </section>
       )}
 

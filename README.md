@@ -277,6 +277,12 @@ Responses API 或 Chat Completions 形态的 OpenAI-compatible 服务。配置�
 API Key 写入操作系统凭据库，不进入 JSON、SQLite、命令参数或评测记录。只有用户点击
 “开始评测”或“测试连接”后才会访问模型服务。
 
+从 Finder 启动的 macOS App 不依赖终端的 `PATH`：核心会在 NVM、FNM、Volta、asdf、mise、
+Homebrew 等常见目录中发现 Codex/Claude CLI，并把解析到的路径显示在连接卡片中。特殊安装
+位置可以通过 `ADAPTIVE_SKILLS_CODEX_EXECUTABLE` 或
+`ADAPTIVE_SKILLS_CLAUDE_EXECUTABLE` 指定绝对路径。无法发现 CLI 时，界面会暂停评测按钮；
+每次评测完成后会显示处理、提案和失败数量，最近的失败原因也会保留在评测页面中。
+
 命令行配置和查看状态：
 
 ```bash

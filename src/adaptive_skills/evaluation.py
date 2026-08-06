@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -281,12 +283,87 @@ class OpenAICompatibleRunner:
 class CLIProviderRunner:
     """Invoke an authenticated local agent in no-tool structured-output mode."""
 
+    PROVIDERS = ("codex", "claude")
+
     @staticmethod
-    def availability() -> dict[str, bool]:
-        return {
-            "codex": shutil.which("codex") is not None,
-            "claude": shutil.which("claude") is not None,
-        }
+    def _version_key(path: Path) -> tuple[int, ...]:
+        values = re.findall(r"\d+", path.name)
+        return tuple(int(value) for value in values) if values else (0,)
+
+    @staticmethod
+    def _is_executable(path: Path) -> bool:
+        return path.is_file() and os.access(path, os.X_OK)
+
+    @classmethod
+    def resolve_executable(cls, provider: str) -> str | None:
+        if provider not in cls.PROVIDERS:
+            return None
+        override = os.environ.get(
+            f"ADAPTIVE_SKILLS_{provider.upper()}_EXECUTABLE", ""
+        ).strip()
+        candidates: list[Path] = []
+        if override:
+            candidates.append(Path(override).expanduser())
+        located = shutil.which(provider)
+        if located:
+            candidates.append(Path(located))
+
+        home = Path.home()
+        common_directories = (
+            home / ".local/bin",
+            home / ".npm-global/bin",
+            home / ".volta/bin",
+            home / ".bun/bin",
+            home / ".asdf/shims",
+            home / ".local/share/mise/shims",
+            home / ".codex/bin",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+        )
+        candidates.extend(directory / provider for directory in common_directories)
+
+        nvm_root = home / ".nvm/versions/node"
+        if nvm_root.is_dir():
+            versions = sorted(
+                (path for path in nvm_root.iterdir() if path.is_dir()),
+                key=cls._version_key,
+                reverse=True,
+            )
+            candidates.extend(version / "bin" / provider for version in versions)
+
+        fnm_roots = (
+            home / ".local/share/fnm/node-versions",
+            home / "Library/Application Support/fnm/node-versions",
+        )
+        for root in fnm_roots:
+            if not root.is_dir():
+                continue
+            versions = sorted(
+                (path for path in root.iterdir() if path.is_dir()),
+                key=cls._version_key,
+                reverse=True,
+            )
+            candidates.extend(
+                version / "installation/bin" / provider for version in versions
+            )
+
+        observed: set[Path] = set()
+        for candidate in candidates:
+            lexical = candidate.absolute()
+            if lexical in observed:
+                continue
+            observed.add(lexical)
+            if cls._is_executable(lexical):
+                return str(lexical)
+        return None
+
+    @classmethod
+    def executables(cls) -> dict[str, str | None]:
+        return {provider: cls.resolve_executable(provider) for provider in cls.PROVIDERS}
+
+    @classmethod
+    def availability(cls) -> dict[str, bool]:
+        return {name: path is not None for name, path in cls.executables().items()}
 
     def run(
         self, config: LLMConfig, prompt: str, schema: dict[str, Any]
@@ -301,6 +378,15 @@ class CLIProviderRunner:
     def _execute(
         arguments: list[str], *, prompt: str, cwd: Path, timeout: int
     ) -> subprocess.CompletedProcess[str]:
+        environment = os.environ.copy()
+        executable = Path(arguments[0])
+        if executable.is_absolute():
+            existing_path = environment.get("PATH", "")
+            environment["PATH"] = os.pathsep.join(
+                value
+                for value in (str(executable.parent), existing_path)
+                if value
+            )
         try:
             result = subprocess.run(
                 arguments,
@@ -308,6 +394,7 @@ class CLIProviderRunner:
                 text=True,
                 capture_output=True,
                 cwd=cwd,
+                env=environment,
                 timeout=timeout,
                 check=False,
             )
@@ -325,7 +412,7 @@ class CLIProviderRunner:
     def _codex(
         self, config: LLMConfig, prompt: str, schema: dict[str, Any]
     ) -> dict[str, Any]:
-        executable = shutil.which("codex") or "codex"
+        executable = self.resolve_executable("codex") or "codex"
         with tempfile.TemporaryDirectory(prefix="adaptive-skills-codex-") as raw:
             root = Path(raw)
             schema_path = root / "schema.json"
@@ -358,7 +445,7 @@ class CLIProviderRunner:
     def _claude(
         self, config: LLMConfig, prompt: str, schema: dict[str, Any]
     ) -> dict[str, Any]:
-        executable = shutil.which("claude") or "claude"
+        executable = self.resolve_executable("claude") or "claude"
         with tempfile.TemporaryDirectory(prefix="adaptive-skills-claude-") as raw:
             root = Path(raw)
             arguments = [
@@ -439,23 +526,27 @@ class EvaluationService:
         self.config_store = LLMConfigStore(settings)
         self.secret_store = secret_store or KeyringSecretStore(settings)
         self.provider_runner = ProviderRunner(self.secret_store, transport)
+        self._uses_default_runner = runner is None
         self.runner = runner or self.provider_runner
 
     def status(self) -> dict[str, Any]:
         config = self.config_store.load()
+        executables = CLIProviderRunner.executables()
         return {
             "config": config.as_dict(),
             "active_profile": (
                 config.active_profile.as_dict() if config.active_profile else None
             ),
             "availability": {
-                **CLIProviderRunner.availability(),
+                **{name: path is not None for name, path in executables.items()},
                 "openai-compatible": True,
                 "credential_store": KeyringSecretStore.available(),
             },
+            "executables": executables,
             "taxonomy": self.taxonomy.snapshot(),
             "pending_count": len(self.pending(limit=5000)),
             "proposal_count": len(self.list(status="proposed", limit=5000)),
+            "recent_errors": self.list(status="error", limit=20),
         }
 
     def configure(
@@ -574,11 +665,11 @@ class EvaluationService:
     def test_profile(self, profile_id: str) -> dict[str, Any]:
         profile = self.config_store.get_profile(profile_id)
         if profile.provider in {"codex", "claude"}:
-            available = CLIProviderRunner.availability()[profile.provider]
+            executable = CLIProviderRunner.resolve_executable(profile.provider)
             return {
-                "ok": available,
+                "ok": executable is not None,
                 "profile_id": profile.id,
-                "executable": profile.provider,
+                "executable": executable,
             }
         return self.provider_runner.compatible.test_connection(profile)
 
@@ -642,6 +733,14 @@ class EvaluationService:
         config = self.config_store.load()
         if config.provider == "disabled":
             raise ValidationError("Configure an LLM provider before evaluating skills")
+        if (
+            self._uses_default_runner
+            and config.provider in CLIProviderRunner.PROVIDERS
+            and CLIProviderRunner.resolve_executable(config.provider) is None
+        ):
+            raise ValidationError(
+                f"LLM executable is not installed or could not be discovered: {config.provider}"
+            )
         run_limit = limit if limit is not None else config.max_per_run
         if not 1 <= run_limit <= config.max_per_run:
             raise ValidationError(

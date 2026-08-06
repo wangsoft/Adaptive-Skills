@@ -118,6 +118,10 @@ export interface LLMStatus {
     "openai-compatible": boolean;
     credential_store: boolean;
   };
+  executables: {
+    codex: string | null;
+    claude: string | null;
+  };
   taxonomy: {
     version: string;
     level_one: string[];
@@ -127,6 +131,7 @@ export interface LLMStatus {
   pending_count: number;
   proposal_count: number;
   proposals: LLMEvaluation[];
+  recent_errors: LLMEvaluation[];
 }
 
 export interface LLMEvaluationRun {
@@ -136,6 +141,14 @@ export interface LLMEvaluationRun {
   proposed: number;
   failed: number;
   results: LLMEvaluation[];
+}
+
+export interface LLMProfileTestResult {
+  ok: boolean;
+  profile_id: string;
+  executable?: string | null;
+  endpoint?: string;
+  model_count?: number;
 }
 
 export interface SourceRefreshResultItem {
