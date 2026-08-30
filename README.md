@@ -51,6 +51,28 @@ Skills should not all live in global context. Adaptive Skills treats `~/skills` 
 - Manage project-scoped and agent-global symlinks, including backup-first migration of external copies.
 - Keep source, evaluation, and project operation history.
 
+## 下载与安装 / Download & install
+
+适用于 **macOS Apple Silicon（arm64）**：[下载 Adaptive Skills v0.1.13 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.13/Adaptive-Skills_0.1.13_aarch64.dmg)。当前构建使用临时签名，**未经过 Apple 公证**。请只从本仓库下载，并在解除隔离前核对 SHA-256。
+
+For **macOS Apple Silicon (arm64)**: [download Adaptive Skills v0.1.13 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.13/Adaptive-Skills_0.1.13_aarch64.dmg). The current build is **not notarized by Apple**. Download only from this repository and verify SHA-256 before removing quarantine.
+
+```bash
+cd ~/Downloads
+shasum -a 256 Adaptive-Skills_0.1.13_aarch64.dmg
+# expected: 5f7b0283eb7eaa74a068a4473f3c94dba7680fa4f2216cda90a6b3e9292ccd7f
+open Adaptive-Skills_0.1.13_aarch64.dmg
+```
+
+将 App 拖入 `/Applications` 后，再解除该 App 的 quarantine 并启动：
+
+After dragging the app into `/Applications`, remove quarantine from that app and launch it:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
+open "/Applications/Adaptive Skills.app"
+```
+
 ## Run locally / 本地运行
 
 Requires Python 3.12+, Node.js, Rust, and Git.
