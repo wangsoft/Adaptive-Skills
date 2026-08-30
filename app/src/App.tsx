@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import appIconUrl from "./assets/app-icon.svg";
+import { Localized, translate, useLanguage } from "./i18n";
 import {
   ProjectActivationMatrix,
   ProjectProfilesPanel,
@@ -190,6 +191,7 @@ function useFocusTrap(
 }
 
 function App() {
+  const { language, setLanguage } = useLanguage();
   const [library, setLibrary] = useState(
     () => localStorage.getItem("adaptive-skills-library") || DEFAULT_LIBRARY,
   );
@@ -223,7 +225,10 @@ function App() {
         }
         if (value.library.path !== library) setLibrary(value.library.path);
         localStorage.setItem("adaptive-skills-library", value.library.path);
-        if (reconcileError) setError(`新来源发现未完成：${reconcileError}`);
+        if (reconcileError) setError(translate(
+          `新来源发现未完成：${reconcileError}`,
+          `Source discovery did not complete: ${reconcileError}`,
+        ));
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -248,7 +253,7 @@ function App() {
   useEscapeKey(Boolean(detail), () => setDetail(null));
 
   const chooseLibrary = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "选择 Skills 目录" });
+    const selected = await open({ directory: true, multiple: false, title: translate("选择 Skills 目录") });
     if (typeof selected === "string") setLibrary(selected);
   };
 
@@ -437,7 +442,10 @@ function App() {
       const result = await api.testLLMProfile(library, profileId);
       await loadSnapshot();
       if (!result.ok) {
-        setError("没有检测到该连接所需的本地 CLI，请检查安装位置或改用 API 连接。");
+        setError(translate(
+          "没有检测到该连接所需的本地 CLI，请检查安装位置或改用 API 连接。",
+          "The required local CLI was not detected. Check its installation path or use an API connection.",
+        ));
       }
       return result;
     } catch (reason) {
@@ -453,13 +461,16 @@ function App() {
       const added = await api.addSource(library, url, name);
       const sourceId = added.id;
       if (typeof sourceId !== "string" || !sourceId) {
-        throw new Error("新来源没有返回可扫描的稳定 ID");
+        throw new Error(translate(
+          "新来源没有返回可扫描的稳定 ID",
+          "The new source did not return a stable ID for scanning",
+        ));
       }
       await api.scan(library, sourceId);
     });
 
   return (
-    <div className="app-shell">
+    <Localized><div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <img className="brand-mark" src={appIconUrl} alt="" aria-hidden="true" />
@@ -492,9 +503,14 @@ function App() {
           </button>
         </div>
 
+        <div className="language-switch" role="group" aria-label="界面语言">
+          <button className={language === "zh-CN" ? "active" : ""} onClick={() => setLanguage("zh-CN")} aria-label={language === "zh-CN" ? "中文" : "Chinese"} aria-pressed={language === "zh-CN"}>ZH</button>
+          <button className={language === "en" ? "active" : ""} onClick={() => setLanguage("en")} aria-label={language === "zh-CN" ? "英文" : "English"} aria-pressed={language === "en"}>EN</button>
+        </div>
+
         <div className="sidebar-footer">
           <span className={`status-dot ${error ? "error" : loading ? "loading" : "ready"}`} />
-          {error ? "连接异常" : loading ? "正在读取目录" : `契约 v${snapshot?.contract_version ?? "—"}`}
+          {error ? "连接异常" : loading ? "正在读取目录" : translate(`契约 v${snapshot?.contract_version ?? "—"}`, `Contract v${snapshot?.contract_version ?? "—"}`)}
         </div>
       </aside>
 
@@ -616,23 +632,23 @@ function App() {
 
       {detail && <SkillDrawer skill={detail} busy={Boolean(busy)} onReview={reviewAuditFinding} onClose={() => setDetail(null)} />}
       {busy && <ActivityToast label={busy} />}
-    </div>
+    </div></Localized>
   );
 }
 
 function LoadingState() {
   return (
-    <div className="center-state">
+    <Localized><div className="center-state">
       <LoaderCircle className="spin" size={28} />
       <strong>正在连接本地目录</strong>
       <span>读取 SQLite 目录，不会执行第三方 Skill。</span>
-    </div>
+    </div></Localized>
   );
 }
 
 function EmptyConnection({ library, onChoose, onRetry }: { library: string; onChoose: () => void; onRetry: () => void }) {
   return (
-    <div className="center-state empty">
+    <Localized><div className="center-state empty">
       <Database size={32} />
       <strong>尚未连接 Skills 目录</strong>
       <span>{library}</span>
@@ -640,7 +656,7 @@ function EmptyConnection({ library, onChoose, onRetry }: { library: string; onCh
         <button className="button secondary" onClick={onChoose}><FolderOpen size={16} />选择目录</button>
         <button className="button primary" onClick={onRetry}><RefreshCw size={16} />重新连接</button>
       </div>
-    </div>
+    </div></Localized>
   );
 }
 
@@ -687,7 +703,7 @@ function BootstrapView({ library, status, onRefresh, onError }: {
   };
 
   const chooseScanRoots = async () => {
-    const selected = await open({ directory: true, multiple: true, title: "选择要扫描的 Skill 目录" });
+    const selected = await open({ directory: true, multiple: true, title: translate("选择要扫描的 Skill 目录") });
     const paths = typeof selected === "string" ? [selected] : selected || [];
     if (!paths.length) return;
     const next = Array.from(new Set([...extraRoots, ...paths]));
@@ -730,9 +746,10 @@ function BootstrapView({ library, status, onRefresh, onError }: {
 
   const installSelected = async () => {
     if (!selectedStarters.size) return;
-    const accepted = window.confirm(
+    const accepted = window.confirm(translate(
       `将从 GitHub 克隆 ${selectedStarters.size} 个第三方仓库到 ${library}，随后只做静态扫描，不会执行其中的 Skill。是否继续？`,
-    );
+      `${selectedStarters.size} third-party repositories will be cloned from GitHub into ${library}, then statically scanned without executing any Skill. Continue?`,
+    ));
     if (!accepted) return;
     setWorking("install");
     setInstallResult(null);
@@ -753,7 +770,7 @@ function BootstrapView({ library, status, onRefresh, onError }: {
   const allImportableSelected = Boolean(importableIds.length) && importableIds.every((id) => selectedCandidates.has(id));
 
   return (
-    <div className="bootstrap-page stack gap-lg">
+    <Localized><div className="bootstrap-page stack gap-lg">
       <section className="panel bootstrap-hero">
         <div>
           <div className="eyebrow"><Layers3 size={14} /> First-run repository builder</div>
@@ -868,7 +885,7 @@ function BootstrapView({ library, status, onRefresh, onError }: {
           </div>
         ) : null}
       </section>
-    </div>
+    </div></Localized>
   );
 }
 
@@ -877,13 +894,13 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
   const safePercent = summary.skill_count ? Math.round((summary.valid_count / summary.skill_count) * 100) : 0;
   const elevated = summary.risk_counts.high + summary.risk_counts.critical;
   const cards = [
-    { label: "收录 Skills", value: summary.skill_count, note: `${summary.annotated_count} 条智能整理`, icon: Layers3, tone: "mint" },
-    { label: "Git 来源", value: summary.source_count, note: `最后扫描 ${formatDate(summary.last_scanned_at)}`, icon: FolderGit2, tone: "blue" },
-    { label: "有效率", value: `${safePercent}%`, note: `${summary.invalid_count} 个需要修复`, icon: ShieldCheck, tone: "green" },
-    { label: "高风险信号", value: elevated, note: `${summary.risk_counts.critical} 个严重风险`, icon: ShieldAlert, tone: "amber" },
+    { label: "收录 Skills", value: summary.skill_count, note: translate(`${summary.annotated_count} 条智能整理`, `${summary.annotated_count} smart annotations`), icon: Layers3, tone: "mint" },
+    { label: "Git 来源", value: summary.source_count, note: translate(`最后扫描 ${formatDate(summary.last_scanned_at)}`, `Last scanned ${formatDate(summary.last_scanned_at)}`), icon: FolderGit2, tone: "blue" },
+    { label: "有效率", value: `${safePercent}%`, note: translate(`${summary.invalid_count} 个需要修复`, `${summary.invalid_count} need attention`), icon: ShieldCheck, tone: "green" },
+    { label: "高风险信号", value: elevated, note: translate(`${summary.risk_counts.critical} 个严重风险`, `${summary.risk_counts.critical} critical risks`), icon: ShieldAlert, tone: "amber" },
   ];
   return (
-    <div className="stack gap-xl">
+    <Localized><div className="stack gap-xl">
       <section className="hero-panel">
         <div>
           <div className="eyebrow"><Sparkles size={14} /> 本地优先 · 按项目加载</div>
@@ -936,13 +953,13 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
               <div className="compact-row" key={source.id}>
                 <div className="source-avatar">{source.name.slice(0, 2).toUpperCase()}</div>
                 <div><strong>{source.name}</strong><span>{source.skill_count} skills · {shortSha(source.head_sha)}</span></div>
-                <span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? `${source.invalid_count} 异常` : "健康"}</span>
+                <span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? translate(`${source.invalid_count} 异常`, `${source.invalid_count} issues`) : "健康"}</span>
               </div>
             ))}
           </div>
         </article>
       </section>
-    </div>
+    </div></Localized>
   );
 }
 
@@ -983,7 +1000,7 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
   };
 
   return (
-    <div className="stack gap-lg">
+    <Localized><div className="stack gap-lg">
       <section className="panel filter-panel">
         <form className="search-field" onSubmit={submit}>
           <Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="描述项目需求，或搜索 Skill 名称…" />
@@ -1017,12 +1034,12 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
         ))}
       </section>
       {!filtered.length && <div className="empty-inline"><Search size={24} /><strong>没有匹配的 Skill</strong><span>尝试调整风险、来源或分类筛选。</span></div>}
-    </div>
+    </div></Localized>
   );
 }
 
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
-  return <label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
+  return <Localized><label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label></Localized>;
 }
 
 function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, onSetPolicy, onPreviewRemove, onRemove, onRestore, onPreviewForget, onForget, llmEnabled, onEvaluate }: {
@@ -1093,9 +1110,10 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
   const refreshFailures = refreshResult?.results.filter((item) => item.status === "failed") ?? [];
   const evaluateSource = (source: SourceSummary) => {
     if (!source.pending_evaluation_count || !llmEnabled) return;
-    const confirmed = window.confirm(
+    const confirmed = window.confirm(translate(
       `将使用已配置的大模型评测 ${source.name}。当前有 ${source.pending_evaluation_count} 个待处理 Skill，本次按配置上限执行，可能消耗模型额度。是否继续？`,
-    );
+      `${source.name} will be evaluated with the configured model. ${source.pending_evaluation_count} Skills are pending; this run follows the configured limit and may consume model quota. Continue?`,
+    ));
     if (confirmed) {
       setEvaluationResult(null);
       void onEvaluate(source.id).then((result) => {
@@ -1156,7 +1174,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
   const blockedForget = Boolean(forgetPreview?.blocker_count);
   const restorableRemovedCount = removedSources.filter((source) => source.restorable).length;
   return (
-    <div className="stack gap-lg">
+    <Localized><div className="stack gap-lg">
       <div className="section-toolbar">
         <div><h2>{sources.length} 个来源</h2><p>根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。</p></div>
         <div className="button-row">
@@ -1177,7 +1195,10 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
             {reconcileResult.failed ? <AlertTriangle size={18} /> : <Check size={18} />}
             <div>
               <strong>Skills 目录检查完成</strong>
-              <p>{reconcileResult.discovered ? `新发现 ${reconcileResult.discovered} 个 Git 来源 · ${reconcileResult.scanned} 个已扫描 · ${reconcileResult.failed} 个失败` : "没有发现未登记的顶层 Git 仓库"}</p>
+              <p>{reconcileResult.discovered ? translate(
+                `新发现 ${reconcileResult.discovered} 个 Git 来源 · ${reconcileResult.scanned} 个已扫描 · ${reconcileResult.failed} 个失败`,
+                `Discovered ${reconcileResult.discovered} Git sources · ${reconcileResult.scanned} scanned · ${reconcileResult.failed} failed`,
+              ) : "没有发现未登记的顶层 Git 仓库"}</p>
             </div>
           </div>
           {reconcileResult.results.filter((item) => item.status === "failed").map((item) => <div className="refresh-failures" key={item.source_id}><p><strong>{item.source}</strong><span>{item.error || "扫描失败"}</span></p></div>)}
@@ -1202,15 +1223,22 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
       {evaluationResult && <EvaluationRunSummary run={evaluationResult} />}
       {removalResult && (
         <div className="refresh-summary" role="status">
-          <div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已从目录移除</strong><p>{removalResult.cleanup_references ? `已清理 ${removalResult.cleaned_reference_count} 个受管引用` : `保留 ${removalResult.kept_reference_count} 个项目引用`} · Git 仓库仍保留在原位置</p></div></div>
+          <div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已从目录移除</strong><p>{removalResult.cleanup_references
+            ? translate(`已清理 ${removalResult.cleaned_reference_count} 个受管引用`, `Cleaned ${removalResult.cleaned_reference_count} managed references`)
+            : translate(`保留 ${removalResult.kept_reference_count} 个项目引用`, `Kept ${removalResult.kept_reference_count} project references`)} · Git 仓库仍保留在原位置</p></div></div>
           <div className="source-retained-path" title={removalResult.repository_path}><FolderGit2 size={14} /><span>{removalResult.repository_path}</span></div>
         </div>
       )}
-      {restoredName && <div className="refresh-summary" role="status"><div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已恢复</strong><p>{restoredName} 已重新扫描并返回目录。</p></div></div></div>}
+      {restoredName && <div className="refresh-summary" role="status"><div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已恢复</strong><p>{translate(`${restoredName} 已重新扫描并返回目录。`, `${restoredName} was rescanned and restored to the catalog.`)}</p></div></div></div>}
       {forgetResult && (
         <div className="refresh-summary" role="status">
-          <div className="refresh-summary-heading"><Check size={18} /><div><strong>目录历史记录已彻底移除</strong><p>{forgetResult.source_name} 的 {forgetResult.deleted_skill_count} 个历史 Skill 已从 SQLite 删除；现在可以重新登记同名或同路径仓库。</p></div></div>
-          <div className="source-retained-path" title={forgetResult.repository_path}><FolderGit2 size={14} /><span>{forgetResult.repository_exists ? `仓库文件仍保留：${forgetResult.repository_path}` : `原仓库目录已不存在：${forgetResult.repository_path}`}</span></div>
+          <div className="refresh-summary-heading"><Check size={18} /><div><strong>目录历史记录已彻底移除</strong><p>{translate(
+            `${forgetResult.source_name} 的 ${forgetResult.deleted_skill_count} 个历史 Skill 已从 SQLite 删除；现在可以重新登记同名或同路径仓库。`,
+            `${forgetResult.deleted_skill_count} historical Skills from ${forgetResult.source_name} were deleted from SQLite. A repository with the same name or path can now be registered again.`,
+          )}</p></div></div>
+          <div className="source-retained-path" title={forgetResult.repository_path}><FolderGit2 size={14} /><span>{forgetResult.repository_exists
+            ? translate(`仓库文件仍保留：${forgetResult.repository_path}`, `Repository files remain: ${forgetResult.repository_path}`)
+            : translate(`原仓库目录已不存在：${forgetResult.repository_path}`, `Original repository directory no longer exists: ${forgetResult.repository_path}`)}</span></div>
         </div>
       )}
       {refreshHistory.length > 0 && (
@@ -1239,7 +1267,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
               {source.repository_exists === false && source.reclone_supported && source.url ? <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onAdd(source.url!, source.name)}>{busy === "source-add" ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}重新 Clone 并扫描</button> : <>
                 {source.url && <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>}
                 <button className="button secondary compact" disabled={Boolean(busy)} onClick={() => void onScan(source.id)}>{busy === `scan-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新扫描</button>
-                {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? `评测 ${source.pending_evaluation_count}` : "配置 LLM"}</button>}
+                {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? translate(`评测 ${source.pending_evaluation_count}`, `Evaluate ${source.pending_evaluation_count}`) : "配置 LLM"}</button>}
                 {source.url && source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
               </>}
               <button className="button ghost compact danger" disabled={Boolean(busy)} onClick={() => void previewRemoval(source)}>{busy === `source-remove-preview-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}移除来源</button>
@@ -1307,7 +1335,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
           </div>
         </div>
       )}
-    </div>
+    </div></Localized>
   );
 }
 
@@ -1323,7 +1351,7 @@ function EvaluationRunSummary({ run }: { run: LLMEvaluationRun }) {
     item.recommendation === "ignore"
   );
   return (
-    <div className={`refresh-summary ${run.failed ? "with-failures" : ""}`} role="status">
+    <Localized><div className={`refresh-summary ${run.failed ? "with-failures" : ""}`} role="status">
       <div className="refresh-summary-heading">
         {run.failed ? <AlertTriangle size={17} /> : <Check size={17} />}
         <div>
@@ -1353,7 +1381,7 @@ function EvaluationRunSummary({ run }: { run: LLMEvaluationRun }) {
           {noteworthy.length > 8 && <small>另有 {noteworthy.length - 8} 项，请在 LLM 评测页查看。</small>}
         </div>
       )}
-    </div>
+    </div></Localized>
   );
 }
 
@@ -1365,7 +1393,7 @@ function EvaluationProposalCard({ proposal, busy, onApply, onReject }: {
 }) {
   const comparison = proposal.comparison;
   return (
-    <article className={`proposal-card ${proposal.recommendation === "ignore" ? "ignore-recommended" : ""}`}>
+    <Localized><article className={`proposal-card ${proposal.recommendation === "ignore" ? "ignore-recommended" : ""}`}>
       <div className="proposal-heading">
         <div><strong>{proposal.skill_name}</strong><span>{proposal.source_name} · {proposal.provider}{proposal.model ? `/${proposal.model}` : ""}</span></div>
         <div className="proposal-score"><strong>{proposal.score != null ? proposal.score.toFixed(1) : "—"}</strong><small>/ 10 质量分</small></div>
@@ -1385,7 +1413,10 @@ function EvaluationProposalCard({ proposal, busy, onApply, onReject }: {
           <AlertTriangle size={15} />
           <div>
             <strong>发现同名 Skill</strong>
-            <p>{proposal.name_conflicts.map((conflict) => `${conflict.name}（${conflict.source_name}${conflict.score != null ? `，${conflict.score.toFixed(1)} 分` : "，未评分"}）`).join("；")}</p>
+            <p>{proposal.name_conflicts.map((conflict) => translate(
+              `${conflict.name}（${conflict.source_name}${conflict.score != null ? `，${conflict.score.toFixed(1)} 分` : "，未评分"}）`,
+              `${conflict.name} (${conflict.source_name}, ${conflict.score != null ? `${conflict.score.toFixed(1)} points` : "unscored"})`,
+            )).join(translate("；", "; "))}</p>
             <small>请先确认它们是否是重复来源、分支版本或不同实现。</small>
           </div>
         </div>
@@ -1395,8 +1426,11 @@ function EvaluationProposalCard({ proposal, busy, onApply, onReject }: {
           <ShieldCheck size={15} />
           <div>
             <strong>建议忽略此 Skill</strong>
-            <p>现有 {comparison.matched_skill_name || "Skill"}（{comparison.matched_source_name || "未知来源"}，{comparison.existing_score?.toFixed(1) ?? "—"} 分）在本地能力比对中完整覆盖本 Skill，且评分高于当前 {proposal.score?.toFixed(1) ?? "—"} 分。</p>
-            {comparison.matched_capabilities?.length ? <small>覆盖能力：{comparison.matched_capabilities.join("、")}</small> : null}
+            <p>{translate(
+              `现有 ${comparison.matched_skill_name || "Skill"}（${comparison.matched_source_name || "未知来源"}，${comparison.existing_score?.toFixed(1) ?? "—"} 分）在本地能力比对中完整覆盖本 Skill，且评分高于当前 ${proposal.score?.toFixed(1) ?? "—"} 分。`,
+              `Existing ${comparison.matched_skill_name || "Skill"} (${comparison.matched_source_name || "unknown source"}, ${comparison.existing_score?.toFixed(1) ?? "—"} points) fully covers this Skill in the local capability comparison and scores higher than the current ${proposal.score?.toFixed(1) ?? "—"} points.`,
+            )}</p>
+            {comparison.matched_capabilities?.length ? <small>{translate(`覆盖能力：${comparison.matched_capabilities.join("、")}`, `Covered capabilities: ${comparison.matched_capabilities.join(", ")}`)}</small> : null}
             <small>这是审核建议，已写入评测记录；系统不会自动停用、删除或隐藏 Skill。</small>
           </div>
         </div>
@@ -1405,7 +1439,7 @@ function EvaluationProposalCard({ proposal, busy, onApply, onReject }: {
         <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => onReject(proposal.id)}>{busy === `evaluation-reject-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <X size={14} />}拒绝提案</button>
         <button className="button primary compact" disabled={Boolean(busy) || !proposal.current_content} onClick={() => onApply(proposal.id, proposal.has_annotation)}>{busy === `evaluation-apply-${proposal.id}` ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}{proposal.recommendation === "ignore" ? "仍然应用" : proposal.has_annotation ? "替换现有整理" : "应用提案"}</button>
       </div>
-    </article>
+    </article></Localized>
   );
 }
 
@@ -1491,9 +1525,11 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
     }
   };
   const evaluate = (source: SourceSummary) => {
-    const confirmed = window.confirm(
-      `将调用 ${active?.name || "当前模型"} 评测 ${source.name}。单次最多处理 ${current.max_per_run} 个 Skill，可能消耗模型额度。是否继续？`,
-    );
+    const activeName = active?.name || translate("当前模型", "the active model");
+    const confirmed = window.confirm(translate(
+      `将调用 ${activeName} 评测 ${source.name}。单次最多处理 ${current.max_per_run} 个 Skill，可能消耗模型额度。是否继续？`,
+      `${activeName} will evaluate ${source.name}, processing up to ${current.max_per_run} Skills in this run and potentially consuming model quota. Continue?`,
+    ));
     if (confirmed) {
       setLastRun(null);
       void onEvaluate(source.id).then((result) => {
@@ -1504,25 +1540,34 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
   const testProfile = (profile: LLMProfile) => {
     if (
       profile.provider === "openai-compatible" &&
-      !window.confirm("连接测试会访问该服务的 /models 接口，是否继续？")
+      !window.confirm(translate(
+        "连接测试会访问该服务的 /models 接口，是否继续？",
+        "The connection test will access this service's /models endpoint. Continue?",
+      ))
     ) return;
     void onTest(profile.id).then((result) => {
       if (!result?.ok) return;
       const detail = result.executable ? `\n${result.executable}` : "";
-      window.alert(`连接测试通过${detail}`);
+      window.alert(translate(`连接测试通过${detail}`, `Connection test passed${detail}`));
     });
   };
   const clearErrors = async () => {
-    if (!window.confirm(`确定清空全部失败记录？当前列表显示最近 ${snapshot.llm.recent_errors.length} 条。待审核提案和已应用结果不会受到影响，这些 Skill 仍可重新评测。`)) return;
+    if (!window.confirm(translate(
+      `确定清空全部失败记录？当前列表显示最近 ${snapshot.llm.recent_errors.length} 条。待审核提案和已应用结果不会受到影响，这些 Skill 仍可重新评测。`,
+      `Clear all failure history? The list currently shows the most recent ${snapshot.llm.recent_errors.length} entries. Pending proposals and applied results are unaffected, and these Skills can be evaluated again.`,
+    ))) return;
     if (await onClearErrors()) setLastRun(null);
   };
   const apply = (evaluationId: string, replaceExisting: boolean) => {
-    if (replaceExisting && !window.confirm("此操作会替换现有人工或 Arena 整理结果。确认继续？")) return;
+    if (replaceExisting && !window.confirm(translate(
+      "此操作会替换现有人工或 Arena 整理结果。确认继续？",
+      "This will replace the existing human or Arena curation. Continue?",
+    ))) return;
     void onApply(evaluationId, replaceExisting);
   };
 
   return (
-    <div className="stack gap-lg evaluation-page">
+    <Localized><div className="stack gap-lg evaluation-page">
       <section className="panel evaluator-settings">
         <div className="panel-heading"><div><span className="eyebrow">Provider profiles</span><h3>模型连接</h3></div><div className="button-row"><button className="button ghost compact" disabled={!active || Boolean(busy)} onClick={() => void onDisable()}>暂停评测</button><button className="button primary compact" disabled={Boolean(busy)} onClick={() => { if (!hasDraft) resetForm(); setShowForm(true); }}><Plus size={15} />{hasDraft ? "继续未保存连接" : "添加连接"}</button></div></div>
         <p className="muted">支持 Codex CLI、Claude Code 和 OpenAI-compatible API。API Key 只写入系统凭据库，不进入目录配置、命令参数或评测记录。</p>
@@ -1538,7 +1583,7 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
                   ? <small>{profile.credential_configured ? "已配置凭据" : "无凭据 / 本地服务"}</small>
                   : <small title={snapshot.llm.executables[profile.provider] || undefined}>{snapshot.llm.executables[profile.provider] || "未找到 CLI"}</small>}
               </div>
-              <div className="profile-actions"><button className="text-button" disabled={Boolean(busy)} onClick={() => editProfile(profile)}>编辑</button><button className="text-button" disabled={Boolean(busy)} onClick={() => testProfile(profile)}>测试</button>{!selected && <button className="text-button" disabled={Boolean(busy)} onClick={() => void onActivate(profile.id)}>启用</button>}<button className="text-button danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(`删除模型连接“${profile.name}”？项目评测记录会保留。`)) void onDelete(profile.id); }}><Trash2 size={13} />删除</button></div>
+              <div className="profile-actions"><button className="text-button" disabled={Boolean(busy)} onClick={() => editProfile(profile)}>编辑</button><button className="text-button" disabled={Boolean(busy)} onClick={() => testProfile(profile)}>测试</button>{!selected && <button className="text-button" disabled={Boolean(busy)} onClick={() => void onActivate(profile.id)}>启用</button>}<button className="text-button danger" disabled={Boolean(busy)} onClick={() => { if (window.confirm(translate(`删除模型连接“${profile.name}”？项目评测记录会保留。`, `Delete model connection “${profile.name}”? Project evaluation history will be retained.`))) void onDelete(profile.id); }}><Trash2 size={13} />删除</button></div>
             </article>;
           })}
           {!current.profiles.length && <div className="history-empty"><Settings2 size={20} /><span>还没有模型连接。添加一个连接后才能对新 Skill 生成分类和评分提案。</span></div>}
@@ -1590,13 +1635,18 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
         <div className="panel-heading"><div><span className="eyebrow">Human review gate</span><h3>评测提案</h3></div><span className="badge neutral">{snapshot.llm.proposals.length} 项</span></div>
         {snapshot.llm.proposals.length ? <div className="proposal-list">{snapshot.llm.proposals.map((proposal) => <EvaluationProposalCard proposal={proposal} busy={busy} onApply={apply} onReject={(id) => void onReject(id)} key={proposal.id} />)}</div> : <div className="history-empty"><Sparkles size={20} /><span>还没有待审核的 LLM 评测提案。</span></div>}
       </section>
-    </div>
+    </div></Localized>
   );
 }
 
 function projectHistoryLabel(event: ProjectHistoryEvent): string {
-  const labels = { apply: "应用 Skills", adopt: "迁移为受管理软链接", sync: "同步来源变更", unlink: "移除 Skills" };
-  return `${labels[event.action]} · ${event.count} 项`;
+  const labels = {
+    apply: translate("应用 Skills", "Apply Skills"),
+    adopt: translate("迁移为受管理软链接", "Migrate to managed symlink"),
+    sync: translate("同步来源变更", "Sync source changes"),
+    unlink: translate("移除 Skills", "Remove Skills"),
+  };
+  return translate(`${labels[event.action]} · ${event.count} 项`, `${labels[event.action]} · ${event.count} items`);
 }
 
 function ProjectsView({ library, categories, onError }: { library: string; categories: CategoryFilter[]; onError: (message: string | null) => void }) {
@@ -1745,7 +1795,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   }, [initialDraft.project, loadProjectContext]);
 
   const chooseProject = async () => {
-    const selectedPath = await open({ directory: true, multiple: false, title: "选择要初始化的项目" });
+    const selectedPath = await open({ directory: true, multiple: false, title: translate("选择要初始化的项目", "Choose a project to set up") });
     if (typeof selectedPath === "string") {
       setProject(selectedPath); setPlan(null); setStatus(null); setSelected(new Set()); setProfilePreview(null);
       await loadProjectContext(selectedPath, true);
@@ -1759,9 +1809,12 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   };
 
   const addProject = async () => {
-    const selectedPath = await open({ directory: true, multiple: false, title: "选择需要使用 Skills 的代码项目" });
+    const selectedPath = await open({ directory: true, multiple: false, title: translate("选择需要使用 Skills 的代码项目", "Choose a code project that needs Skills") });
     if (typeof selectedPath !== "string") return;
-    if (project && project !== selectedPath && !window.confirm("选择其他项目会替换当前项目草稿，是否继续？")) return;
+    if (project && project !== selectedPath && !window.confirm(translate(
+      "选择其他项目会替换当前项目草稿，是否继续？",
+      "Choosing another project will replace the current project draft. Continue?",
+    ))) return;
     await run("project-add", async () => {
       const selectedStatus = await api.projectStatus(library, selectedPath);
       setPlan(null); setSelected(new Set()); setRiskConfirmed(false); setProfilePreview(null);
@@ -1777,7 +1830,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   };
 
   const relinkProject = async (item: ProjectSummary) => {
-    const selectedPath = await open({ directory: true, multiple: false, title: `重新定位 ${item.display_name}` });
+    const selectedPath = await open({ directory: true, multiple: false, title: translate(`重新定位 ${item.display_name}`, `Relocate ${item.display_name}`) });
     if (typeof selectedPath !== "string") return;
     await run("project-relink", async () => {
       await api.projectRelink(library, item.id, selectedPath);
@@ -1786,7 +1839,10 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   };
 
   const forgetProject = async (item: ProjectSummary) => {
-    if (!window.confirm(`从列表中移除“${item.display_name}”？项目目录和 manifest 都会保留。`)) return;
+    if (!window.confirm(translate(
+      `从列表中移除“${item.display_name}”？项目目录和 manifest 都会保留。`,
+      `Remove “${item.display_name}” from the list? The project directory and manifest will be retained.`,
+    ))) return;
     await run("project-forget", async () => {
       await api.projectForget(library, item.id);
       await loadProjects();
@@ -1827,18 +1883,22 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     matrixTarget: ActivationTarget,
   ) => {
     const riskCopy = isElevatedRisk(cell.audit_severity)
-      ? " 该 Skill 带有高风险信号，本次操作会记录风险确认。"
+      ? translate(
+        " 该 Skill 带有高风险信号，本次操作会记录风险确认。",
+        " This Skill has elevated-risk signals; the action will record risk confirmation.",
+      )
       : "";
-    if (!window.confirm(
+    if (!window.confirm(translate(
       "将“" + row.name + "”以受管软链接安装到 " + matrixTarget.label +
       "？\n目标：" + cell.path + "。" + riskCopy,
-    )) return;
+      `Install “${row.name}” as a managed symlink in ${matrixTarget.label}?\nTarget: ${cell.path}.${riskCopy}`,
+    ))) return;
     void run("matrix-install", async () => {
       await api.projectApply(
         library,
         matrixTarget.path,
         [cell.skill_id],
-        "Agent 全局安装矩阵",
+        translate("Agent 全局安装矩阵", "Agent-global installation matrix"),
         "root",
         allowRisk,
       );
@@ -1852,10 +1912,11 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     matrixTarget: ActivationTarget,
   ) => {
     if (!cell.installed_skill_id) return;
-    if (!window.confirm(
+    if (!window.confirm(translate(
       "从 " + matrixTarget.label + " 卸载“" + row.name +
       "”的受管软链接？目录仓库中的 Skill 不会被删除。",
-    )) return;
+      `Uninstall the managed symlink for “${row.name}” from ${matrixTarget.label}? The library copy will not be deleted.`,
+    ))) return;
     void run("matrix-uninstall", async () => {
       await api.projectUnlink(
         library,
@@ -1872,12 +1933,13 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     matrixTarget: ActivationTarget,
   ) => {
     if (!cell.adopt_skill_id) return;
-    if (!window.confirm(
+    if (!window.confirm(translate(
       "将 " + matrixTarget.label + " 中外部已有的“" + row.name +
       "”迁移为受管理软链接？\n\n原目录会先备份到该 Agent 目录的 .adaptive-skills/external-backups/，" +
       "再链接到 ~/skills 中的所选版本；任何一步失败都会恢复原目录。" +
       (cell.content_match === false ? "\n\n注意：所选仓库版本与外部副本内容不同，原内容会完整保留在备份中。" : ""),
-    )) return;
+      `Migrate the external “${row.name}” in ${matrixTarget.label} to a managed symlink?\n\nThe original directory will first be backed up to .adaptive-skills/external-backups/ in that agent directory, then linked to the selected version in ~/skills. Any failure restores the original directory.${cell.content_match === false ? "\n\nNote: the selected repository version differs from the external copy. The original content will remain intact in the backup." : ""}`,
+    ))) return;
     void run("matrix-adopt", async () => {
       await api.projectAdopt(
         library,
@@ -1914,11 +1976,12 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
 
   const applyProfile = () => {
     if (!profilePreview || !selectedProfileId) return;
-    if (!window.confirm(
+    if (!window.confirm(translate(
       "将配置集“" + profilePreview.profile.name + "”应用到当前目标？\n" +
       profilePreview.counts.install + " 项将创建受管软链接，" +
       profilePreview.counts["already-installed"] + " 项保持不变。",
-    )) return;
+      `Apply profile “${profilePreview.profile.name}” to the current target?\n${profilePreview.counts.install} managed symlinks will be created; ${profilePreview.counts["already-installed"]} existing items will remain unchanged.`,
+    ))) return;
     void run("profile-apply", async () => {
       await api.profileApply(
         library,
@@ -1967,10 +2030,11 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   const deleteProfile = () => {
     const selectedProfile = profiles.find((item) => item.id === selectedProfileId);
     if (!selectedProfile) return;
-    if (!window.confirm(
+    if (!window.confirm(translate(
       "删除配置集“" + selectedProfile.name +
       "”？已经安装到 Agent 或项目中的 Skill 不会被卸载。",
-    )) return;
+      `Delete profile “${selectedProfile.name}”? Skills already installed in agents or projects will not be uninstalled.`,
+    ))) return;
     void run("profile-delete", async () => {
       await api.profileDelete(library, selectedProfile.id);
       setSelectedProfileId("");
@@ -1983,8 +2047,8 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     const selectedPath = await open({
       directory: false,
       multiple: false,
-      title: "选择 Adaptive Skills 配置集",
-      filters: [{ name: "Adaptive Skills 配置集", extensions: ["json"] }],
+      title: translate("选择 Adaptive Skills 配置集", "Choose an Adaptive Skills profile"),
+      filters: [{ name: translate("Adaptive Skills 配置集", "Adaptive Skills profile"), extensions: ["json"] }],
     });
     if (typeof selectedPath !== "string") return;
     void run("profile-import-preview", async () => {
@@ -2009,8 +2073,14 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
       setProfileImportPreview(null);
       setProfileTransferMessage(
         imported.changed
-          ? "已导入“" + imported.profile.name + "”；尚未安装任何 Skill。"
-          : "完全相同的配置集已存在，本次没有创建重复记录。",
+          ? translate(
+            `已导入“${imported.profile.name}”；尚未安装任何 Skill。`,
+            `Imported “${imported.profile.name}”; no Skills have been installed yet.`,
+          )
+          : translate(
+            "完全相同的配置集已存在，本次没有创建重复记录。",
+            "An identical profile already exists; no duplicate record was created.",
+          ),
       );
     });
   };
@@ -2022,9 +2092,9 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
       .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
       .slice(0, 80) || "skill-profile";
     const destination = await saveFile({
-      title: "导出 Adaptive Skills 配置集",
+      title: translate("导出 Adaptive Skills 配置集", "Export Adaptive Skills profile"),
       defaultPath: safeName + ".adaptive-skills.json",
-      filters: [{ name: "Adaptive Skills 配置集", extensions: ["json"] }],
+      filters: [{ name: translate("Adaptive Skills 配置集", "Adaptive Skills profile"), extensions: ["json"] }],
     });
     if (typeof destination !== "string") return;
     void run("profile-export", async () => {
@@ -2035,7 +2105,10 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
         true,
       );
       setProfileTransferMessage(
-        "已导出“" + exported.profile.name + "”到 " + exported.path,
+        translate(
+          `已导出“${exported.profile.name}”到 ${exported.path}`,
+          `Exported “${exported.profile.name}” to ${exported.path}`,
+        ),
       );
     });
   };
@@ -2086,10 +2159,19 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     const preservesCopy = entry.entry_type === "directory";
     const versionWarning = match.content_match
       ? ""
-      : "\n\n注意：目录中的内容与所选仓库版本不同。迁移后会使用仓库版本，原内容仍完整保留在备份中。";
+      : translate(
+        "\n\n注意：目录中的内容与所选仓库版本不同。迁移后会使用仓库版本，原内容仍完整保留在备份中。",
+        "\n\nNote: the directory content differs from the selected repository version. The repository version will be used after migration, while the original remains intact in the backup.",
+      );
     const message = preservesCopy
-      ? `将“${entry.name}”迁移为受管理软链接？\n\n原目录：${project}/${entry.path}\n备份位置：${project}/.adaptive-skills/external-backups/\n链接目标：${match.target_path}${versionWarning}\n\nAdaptive Skills 会先完成备份，再替换为软链接；任何一步失败都会恢复原目录。以后卸载时也会恢复这份备份。`
-      : `将“${entry.name}”关联到目录中的 ${match.source_name}/${match.name}？现有软链接会登记为 Adaptive Skills 管理，之后可以同步或卸载。`;
+      ? translate(
+        `将“${entry.name}”迁移为受管理软链接？\n\n原目录：${project}/${entry.path}\n备份位置：${project}/.adaptive-skills/external-backups/\n链接目标：${match.target_path}${versionWarning}\n\nAdaptive Skills 会先完成备份，再替换为软链接；任何一步失败都会恢复原目录。以后卸载时也会恢复这份备份。`,
+        `Migrate “${entry.name}” to a managed symlink?\n\nOriginal directory: ${project}/${entry.path}\nBackup location: ${project}/.adaptive-skills/external-backups/\nLink target: ${match.target_path}${versionWarning}\n\nAdaptive Skills will complete the backup before replacing the directory with a symlink. Any failure restores the original, and uninstalling later restores this backup.`,
+      )
+      : translate(
+        `将“${entry.name}”关联到目录中的 ${match.source_name}/${match.name}？现有软链接会登记为 Adaptive Skills 管理，之后可以同步或卸载。`,
+        `Associate “${entry.name}” with ${match.source_name}/${match.name} in the library? The existing symlink will become Adaptive-managed and can then be synchronized or uninstalled.`,
+      );
     if (!window.confirm(message)) return;
     void run("adopt", async () => {
       await api.projectAdopt(library, project, entry.name, match.id, allowRisk, !match.content_match);
@@ -2101,18 +2183,29 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   const requestSync = () => {
     if (!status) return;
     const forceCount = status.entries.filter((entry) => projectEntryRequiresForce(entry.state)).length;
-    if (forceCount && !window.confirm(
+    if (forceCount && !window.confirm(translate(
       `检测到 ${forceCount} 个项目内已修改或被替换的条目。强制同步会用目录中的 Skill 覆盖这些项目内容，且无法由 Adaptive Skills 恢复。确认继续？`,
-    )) return;
+      `${forceCount} project entries were modified or replaced. Force sync will overwrite them with library Skills, and Adaptive Skills cannot restore those changes. Continue?`,
+    ))) return;
     void sync(forceCount > 0);
   };
   const requestUnlinkEntry = (entry: ProjectEntryStatus) => {
     const force = projectEntryRequiresForce(entry.state);
+    const entryName = entry.name || entry.skill_id;
     const message = entry.restores_external && !force
-      ? `卸载“${entry.name || entry.skill_id}”的受管链接，并恢复关联前保留的外部目录？目录中的来源不会被删除。`
+      ? translate(
+        `卸载“${entryName}”的受管链接，并恢复关联前保留的外部目录？目录中的来源不会被删除。`,
+        `Uninstall the managed link for “${entryName}” and restore the external directory preserved during adoption? The library source will not be deleted.`,
+      )
       : force
-      ? `“${entry.name || entry.skill_id}”在项目内已有改动或被其他内容替换。强制移除会删除当前路径及其中改动，且无法由 Adaptive Skills 恢复。确认继续？`
-      : `从项目中移除“${entry.name || entry.skill_id}”的受管链接？Skill 来源不会被删除。`;
+      ? translate(
+        `“${entryName}”在项目内已有改动或被其他内容替换。强制移除会删除当前路径及其中改动，且无法由 Adaptive Skills 恢复。确认继续？`,
+        `“${entryName}” was modified or replaced in the project. Force removal deletes the current path and its changes, which Adaptive Skills cannot restore. Continue?`,
+      )
+      : translate(
+        `从项目中移除“${entryName}”的受管链接？Skill 来源不会被删除。`,
+        `Remove the managed link for “${entryName}” from the project? The Skill source will not be deleted.`,
+      );
     if (!window.confirm(message)) return;
     void unlinkEntry(entry.skill_id, force);
   };
@@ -2137,12 +2230,14 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   };
 
   if (screen === "list") {
-    return <div className="stack gap-lg project-index">
+    return <Localized><div className="stack gap-lg project-index">
       <section className="panel project-index-hero">
         <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>本机 Agent 全局目录会作为系统项目自动出现；也可以添加普通代码项目，按需求挂载目录中的 Skills。</p></div>
         <button className="button primary" disabled={Boolean(busy)} onClick={() => void addProject()}>{busy === "project-add" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}添加项目</button>
       </section>
-      {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{discoveryMode === "category" ? categoryL1 ? `分类：${categoryL1}${categoryL2 ? ` / ${categoryL2}` : ""}` : "尚未选择分类" : requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
+      {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{discoveryMode === "category" ? categoryL1
+        ? translate(`分类：${categoryL1}${categoryL2 ? ` / ${categoryL2}` : ""}`, `Category: ${categoryL1}${categoryL2 ? ` / ${categoryL2}` : ""}`)
+        : "尚未选择分类" : requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
       <section className="project-index-grid">
         {projects.map((item) => <article className={`panel managed-project-card status-${item.status}`} key={item.id}>
           <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon">{item.project_kind === "system" ? <Database size={18} /> : <Link2 size={18} />}</div><div><div className="project-card-badges">{item.project_kind === "system" && <span className="badge neutral">系统项目</span>}<span className={`badge ${item.status === "active" ? item.clean ? "success" : "warning" : "warning"}`}>{item.project_kind === "system" && item.status === "active" ? item.clean ? "已连接" : "有漂移" : item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span></div><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
@@ -2168,11 +2263,11 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
         onAdopt={adoptFromMatrix}
         onOpenTarget={openMatrixTarget}
       />
-    </div>;
+    </div></Localized>;
   }
 
   return (
-    <div className="project-layout">
+    <Localized><div className="project-layout">
       <section className="panel project-builder">
         <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> {status?.project_kind === "system" ? "Agent 全局映射" : "项目与发现方式"}</div>{status?.project_kind === "system" ? <span className="badge neutral">系统项目</span> : <button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button>}</div>
         <h2>{status?.project_kind === "system" ? "管理 Agent 全局 Skills" : "按项目选择 Skills"}</h2><p className="muted">{status?.project_kind === "system" ? "系统项目始终保留；可以卸载受管 Skill，外部已有内容默认只读。" : "按需求检索或按分类浏览；只有被勾选的 Skill 才会创建软链接。"}</p>
@@ -2197,7 +2292,11 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
           </div>
         ) : (
           <div className="stack gap-md">
-            <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>{plan.discovery_mode === "category" ? `“${plan.category_l2 || plan.category_l1}”下的 ${plan.recommendations.length} 个 Skills` : `推荐 ${plan.recommendations.length} 个 Skills`}</h2><p className="recommendation-scope" title={plan.library_root}>{plan.discovery_mode === "category" ? `分类浏览 · ${plan.category_l1}${plan.category_l2 ? ` / ${plan.category_l2}` : ""}` : "需求检索"} · 当前 Skill 仓库：{plan.library_root}</p></div><span className="selection-count">已选择 {selected.size}</span></div>
+            <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>{plan.discovery_mode === "category"
+              ? translate(`“${plan.category_l2 || plan.category_l1}”下的 ${plan.recommendations.length} 个 Skills`, `${plan.recommendations.length} Skills under “${plan.category_l2 || plan.category_l1}”`)
+              : translate(`推荐 ${plan.recommendations.length} 个 Skills`, `${plan.recommendations.length} recommended Skills`)}</h2><p className="recommendation-scope" title={plan.library_root}>{plan.discovery_mode === "category"
+                ? translate(`分类浏览 · ${plan.category_l1}${plan.category_l2 ? ` / ${plan.category_l2}` : ""}`, `Browse categories · ${plan.category_l1}${plan.category_l2 ? ` / ${plan.category_l2}` : ""}`)
+                : "需求检索"} · 当前 Skill 仓库：{plan.library_root}</p></div><span className="selection-count">{translate(`已选择 ${selected.size}`, `${selected.size} selected`)}</span></div>
             {plan.recommendations.length ? <div className="recommendation-list">
               {plan.recommendations.map((skill, index) => {
                 const selectable = canSelectSkill(skill, allowRisk);
@@ -2212,19 +2311,19 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
                   : undefined;
                 return (
                   <button className={`recommendation ${selected.has(skill.id) ? "selected" : ""} ${!selectable ? "disabled" : ""} ${projectBlocked ? "already-added" : !selectable ? "unavailable" : ""}`} key={skill.id} onClick={() => toggle(skill)} disabled={!selectable} title={blockedTitle}>
-                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className={`checkbox ${projectBlocked ? "installed" : ""}`}>{(projectBlocked || selected.has(skill.id)) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong>{projectBlocked && <i className={projectState === "installed" ? "badge success" : "badge warning"}>{blockedLabel}{stateDetail && stateDetail !== "已同步" ? ` · ${stateDetail}` : ""}</i>}<i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && plan.discovery_mode !== "category" && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}{(skill.variant_count ?? 0) > 1 && <i className="badge neutral">已归并 {skill.variant_count} 个适配版本</i>}</span><p>{skill.description}</p><small>{plan.discovery_mode === "category" ? `${skill.category_l1}${skill.category_l2 ? ` / ${skill.category_l2}` : ""} · ${skill.source_name}` : skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title={plan.discovery_mode === "category" ? "按智能评分降序展示，未评分的 Skill 按名称排列" : "需求匹配排序分，不是 0–10 质量分"}><small>{plan.discovery_mode === "category" ? "质量" : "匹配"}</small>{plan.discovery_mode === "category" ? skill.annotation_score?.toFixed(1) || "—" : skill.score?.toFixed(1) || "—"}</span>
+                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className={`checkbox ${projectBlocked ? "installed" : ""}`}>{(projectBlocked || selected.has(skill.id)) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong>{projectBlocked && <i className={projectState === "installed" ? "badge success" : "badge warning"}>{blockedLabel}{stateDetail && skill.project_entry_state !== "clean" ? ` · ${stateDetail}` : ""}</i>}<i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && plan.discovery_mode !== "category" && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}{(skill.variant_count ?? 0) > 1 && <i className="badge neutral">已归并 {skill.variant_count} 个适配版本</i>}</span><p>{skill.description}</p><small>{plan.discovery_mode === "category" ? `${skill.category_l1}${skill.category_l2 ? ` / ${skill.category_l2}` : ""} · ${skill.source_name}` : skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title={plan.discovery_mode === "category" ? "按智能评分降序展示，未评分的 Skill 按名称排列" : "需求匹配排序分，不是 0–10 质量分"}><small>{plan.discovery_mode === "category" ? "质量" : "匹配"}</small>{plan.discovery_mode === "category" ? skill.annotation_score?.toFixed(1) || "—" : skill.score?.toFixed(1) || "—"}</span>
                   </button>
                 );
               })}
             </div> : <div className="category-empty"><Layers3 size={20} /><strong>这个分类暂无可展示的 Skill</strong><span>可能是分类内没有有效 Skill，或高风险结果当前被隐藏。可以选择上一级分类或开启风险结果后重试。</span></div>}
-            <button className="button primary wide" disabled={!selected.size || Boolean(busy)} onClick={() => setConfirming(true)}><Link2 size={17} />预览并应用 {selected.size} 个 Skills</button>
+            <button className="button primary wide" disabled={!selected.size || Boolean(busy)} onClick={() => setConfirming(true)}><Link2 size={17} />{translate(`预览并应用 ${selected.size} 个 Skills`, `Preview and apply ${selected.size} Skills`)}</button>
           </div>
         )}
 
         {status && status.entries.length > 0 && (
           <section className="panel project-status-panel">
             <div className="panel-heading"><div><span className="eyebrow">Adaptive managed</span><h3>Adaptive 管理</h3></div><span className={status.clean ? "badge success" : "badge warning"}>{status.clean ? "全部同步" : "检测到漂移"}</span></div>
-            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}{entry.restores_external ? " · 卸载时恢复原目录" : ""}</span></div><span className="entry-state">{projectEntryStateLabel(entry.state)}</span><button aria-label={`卸载 ${entry.name || entry.skill_id}`} title={projectEntryRequiresForce(entry.state) ? "强制移除已改动的受管条目" : entry.restores_external ? "卸载软链接并恢复原目录" : "卸载受管链接"} disabled={Boolean(busy)} onClick={() => requestUnlinkEntry(entry)}><Unlink size={15} /></button></div>)}</div>
+            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}{entry.restores_external ? " · 卸载时恢复原目录" : ""}</span></div><span className="entry-state">{projectEntryStateLabel(entry.state)}</span><button aria-label={translate(`卸载 ${entry.name || entry.skill_id}`, `Uninstall ${entry.name || entry.skill_id}`)} title={projectEntryRequiresForce(entry.state) ? "强制移除已改动的受管条目" : entry.restores_external ? "卸载软链接并恢复原目录" : "卸载受管链接"} disabled={Boolean(busy)} onClick={() => requestUnlinkEntry(entry)}><Unlink size={15} /></button></div>)}</div>
             {status.entries.some((entry) => entry.state === "catalog-missing") && <div className="project-drift-warning"><AlertTriangle size={16} /><span>有条目已不在 Skills 目录中，无法同步。确认项目内容后，请先用右侧按钮从 manifest 移除。</span></div>}
             {status.entries.some((entry) => projectEntryCanSync(entry.state)) && <button className={`button wide ${status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "warning" : "secondary"}`} disabled={Boolean(busy)} onClick={requestSync}><RefreshCw size={16} />{status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "确认并覆盖项目漂移" : "同步来源变更"}</button>}
           </section>
@@ -2234,7 +2333,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
           <section className="panel project-status-panel external-skill-panel">
             <div className="panel-heading"><div><span className="eyebrow">External existing</span><h3>外部已有</h3></div><span className="badge neutral">{status.external_entries.length} 项 · 只读</span></div>
             <p className="external-panel-copy">这里区分宿主自带与用户实体副本。Claude/Codex 自带 Skill 保持宿主管理；用户实体副本只有与目录中的同名 Skill 内容完全一致时，才可先备份再迁移为受管理软链接。</p>
-            {status.external_entries.length ? <div className="external-skill-list">{status.external_entries.map((entry) => <div className="external-skill-row" key={entry.path}><div className="external-skill-state">{entry.management_state === "provider-owned" ? <ShieldCheck size={15} /> : <FolderOpen size={15} />}</div><div className="external-skill-copy"><div><strong>{entry.name}</strong><span className="badge neutral">{entry.management_state === "provider-owned" ? `${entry.provider || "宿主"} 自带` : "外部已有"}</span><span className="badge neutral">{entry.entry_type === "symlink" ? "软链接" : "实体目录"}</span></div><small title={`${project}/${entry.path}`}>{entry.path}</small>{entry.management_state === "provider-owned" ? <p>{entry.protected_reason || "由宿主自行更新，Adaptive Skills 不迁移。"}</p> : entry.matches.length === 0 ? <p>目录中没有发现同名的仓库 Skill，保持外部只读。</p> : null}{entry.matches.map((match) => <div className="external-match" key={match.id}><span>{entry.migration_mode === "backup-and-link" ? "迁移目标" : "可关联"}：{match.source_name}/{match.name} · {match.content_match ? "内容一致" : "版本不同"}</span><button className="button secondary" disabled={Boolean(busy) || !entry.migratable && entry.migration_mode !== "associate-link" || !match.valid || (isElevatedRisk(match.audit_severity) && !allowRisk)} title={isElevatedRisk(match.audit_severity) && !allowRisk ? "请先开启“显示高风险结果”并完成风险确认" : entry.migration_mode === "backup-and-link" ? "确认后先备份原目录，再建立受管理软链接" : "关联后由 Adaptive Skills 管理更新"} onClick={() => adoptExternal(entry, match)}><Link2 size={13} />{busy === "adopt" ? "正在迁移…" : entry.migration_mode === "backup-and-link" ? "迁移为受管理软链接" : "关联并纳管"}</button></div>)}</div></div>)}</div> : <div className="history-empty"><ShieldCheck size={20} /><span>没有未纳管的外部 Skill。</span></div>}
+            {status.external_entries.length ? <div className="external-skill-list">{status.external_entries.map((entry) => <div className="external-skill-row" key={entry.path}><div className="external-skill-state">{entry.management_state === "provider-owned" ? <ShieldCheck size={15} /> : <FolderOpen size={15} />}</div><div className="external-skill-copy"><div><strong>{entry.name}</strong><span className="badge neutral">{entry.management_state === "provider-owned" ? translate(`${entry.provider || "宿主"} 自带`, `${entry.provider || "Host"} provided`) : "外部已有"}</span><span className="badge neutral">{entry.entry_type === "symlink" ? "软链接" : "实体目录"}</span></div><small title={`${project}/${entry.path}`}>{entry.path}</small>{entry.management_state === "provider-owned" ? <p>{entry.protected_reason || "由宿主自行更新，Adaptive Skills 不迁移。"}</p> : entry.matches.length === 0 ? <p>目录中没有发现同名的仓库 Skill，保持外部只读。</p> : null}{entry.matches.map((match) => <div className="external-match" key={match.id}><span>{entry.migration_mode === "backup-and-link" ? "迁移目标" : "可关联"}：{match.source_name}/{match.name} · {match.content_match ? "内容一致" : "版本不同"}</span><button className="button secondary" disabled={Boolean(busy) || !entry.migratable && entry.migration_mode !== "associate-link" || !match.valid || (isElevatedRisk(match.audit_severity) && !allowRisk)} title={isElevatedRisk(match.audit_severity) && !allowRisk ? "请先开启“显示高风险结果”并完成风险确认" : entry.migration_mode === "backup-and-link" ? "确认后先备份原目录，再建立受管理软链接" : "关联后由 Adaptive Skills 管理更新"} onClick={() => adoptExternal(entry, match)}><Link2 size={13} />{busy === "adopt" ? "正在迁移…" : entry.migration_mode === "backup-and-link" ? "迁移为受管理软链接" : "关联并纳管"}</button></div>)}</div></div>)}</div> : <div className="history-empty"><ShieldCheck size={20} /><span>没有未纳管的外部 Skill。</span></div>}
           </section>
         )}
 
@@ -2279,7 +2378,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
           </div>
         </div>
       )}
-    </div>
+    </div></Localized>
   );
 }
 
@@ -2299,7 +2398,7 @@ function FindingRow({
 }) {
   const audit = "finding_id" in finding ? finding : null;
   return (
-    <div className={`finding finding-${tone}`}>
+    <Localized><div className={`finding finding-${tone}`}>
       {tone === "hint" || tone === "excluded" ? <ShieldCheck size={15} /> : <AlertTriangle size={15} />}
       <div>
         <div className="finding-heading"><strong>{finding.rule}</strong><span>{finding.severity}</span></div>
@@ -2315,7 +2414,7 @@ function FindingRow({
           </div>
         )}
       </div>
-    </div>
+    </div></Localized>
   );
 }
 
@@ -2340,10 +2439,10 @@ function FindingSection({
   ) => void;
 }) {
   return (
-    <section className="drawer-section finding-section">
+    <Localized><section className="drawer-section finding-section">
       <div className="section-title-row"><div><h3>{title}</h3><p>{description}</p></div><span>{findings.length}</span></div>
       {findings.length ? <div className="finding-list">{findings.map((finding, index) => <FindingRow key={`${finding.rule}-${finding.file}-${finding.line ?? index}`} finding={finding} tone={tone} busy={busy} onReview={onReview} />)}</div> : <div className="clean-callout"><ShieldCheck size={18} /><span>{empty}</span></div>}
-    </section>
+    </section></Localized>
   );
 }
 
@@ -2361,11 +2460,14 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
   const confirmedRisks = skill.audit.filter((finding) => finding.status === "confirmed_risk");
   const excludedFindings = skill.audit.filter((finding) => finding.status === "reviewed_false_positive");
   return (
-    <div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
+    <Localized><div className="drawer-backdrop" role="presentation" onMouseDown={onClose}>
       <aside className="skill-drawer" role="dialog" aria-modal="true" aria-labelledby="skill-drawer-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawer-header"><div><span className="eyebrow">{skill.source_name} / {skill.rel_path}</span><h2 id="skill-drawer-title">{skill.name}</h2></div><button className="icon-button" autoFocus aria-label="关闭 Skill 详情" onClick={onClose}><X size={18} /></button></div>
         <p className="drawer-description">{skill.description}</p>
-        <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.validation.length ? "badge warning" : "badge success"}>{skill.validation.length ? `${skill.valid ? "格式提示" : "格式不兼容"} ${skill.validation.length}` : "格式兼容"}</span>{(skill.capability_hint_count ?? 0) > 0 && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}{skill.score != null && <span className="badge neutral">智能评分 {skill.score}</span>}</div>
+        <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.validation.length ? "badge warning" : "badge success"}>{skill.validation.length ? translate(
+          `${skill.valid ? "格式提示" : "格式不兼容"} ${skill.validation.length}`,
+          `${skill.valid ? "Format guidance" : "Format incompatible"} ${skill.validation.length}`,
+        ) : "格式兼容"}</span>{(skill.capability_hint_count ?? 0) > 0 && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}{skill.score != null && <span className="badge neutral">智能评分 {skill.score}</span>}</div>
         <div className="detail-grid"><div><span>一级分类</span><strong>{skill.category_l1 || "未分类"}</strong></div><div><span>二级分类</span><strong>{skill.category_l2 || "未分类"}</strong></div><div><span>许可证</span><strong>{skill.license || "未声明"}</strong></div><div><span>来源提交</span><strong>{shortSha(skill.head_sha)}</strong></div></div>
         {(skill.problem || skill.use_case) && <section className="drawer-section"><h3>AI 整理</h3>{skill.problem && <div className="insight-block"><span>解决的问题</span><p>{skill.problem}</p></div>}{skill.use_case && <div className="insight-block"><span>应用场景</span><p>{skill.use_case}</p></div>}</section>}
         <FindingSection title="格式兼容性" description="只判断 SKILL.md 与 frontmatter 是否符合加载规范，不参与安全风险等级。" findings={skill.validation} tone="format" empty="格式兼容，未发现阻止加载的问题。" />
@@ -2375,7 +2477,7 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
         {excludedFindings.length > 0 && <FindingSection title="已排除误报" description="审查结论绑定当前源码摘要；源码变化后会自动回到未确认风险。" findings={excludedFindings} tone="excluded" empty="没有已排除误报。" busy={busy} onReview={onReview} />}
         <section className="drawer-section"><div className="section-title-row"><h3>SKILL.md</h3><span>{skill.skill_md_path}</span></div><pre className="skill-content">{skill.body || "（正文为空）"}</pre></section>
       </aside>
-    </div>
+    </div></Localized>
   );
 }
 
@@ -2403,7 +2505,7 @@ function ActivityToast({ label }: { label: string }) {
     unlink: "正在安全移除链接…",
   };
   const message = messages[label] || (label.startsWith("source-remove-preview-") ? "正在检查来源和受管引用…" : label.startsWith("source-remove-") ? "正在清理受管引用并移除来源…" : label.startsWith("source-restore-") ? "正在恢复并重新扫描来源…" : label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
-  return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
+  return <Localized><div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div></Localized>;
 }
 
 export default App;

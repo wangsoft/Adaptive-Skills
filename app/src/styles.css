@@ -49,6 +49,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .library-card p { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; line-height: 1.5; color: #9ca9a1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 10px 0; }
 .text-button { border: 0; background: none; color: var(--mint); font-size: 11px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 0; }
 .text-button:hover { color: #a0efc8; }
+.language-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin: 9px 0 0; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,0.02); }
+.language-switch button { min-height: 25px; border: 1px solid transparent; border-radius: 6px; color: var(--quiet); background: transparent; font-size: 8px; font-weight: 700; letter-spacing: 0.08em; cursor: pointer; }
+.language-switch button:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.language-switch button.active { color: #b8f2d2; background: rgba(119,224,175,0.09); border-color: rgba(119,224,175,0.14); }
 .sidebar-footer { display: flex; align-items: center; gap: 7px; padding: 14px 8px 0; color: var(--quiet); font-size: 10px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--quiet); }
 .status-dot.ready { background: var(--mint); box-shadow: 0 0 8px rgba(119,224,175,0.55); }

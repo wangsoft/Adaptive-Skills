@@ -21,6 +21,7 @@ import {
   isElevatedRisk,
   profileActionLabel,
 } from "./domain";
+import { Localized, translate } from "./i18n";
 import type {
   ActivationCell,
   ActivationMatrix,
@@ -72,7 +73,7 @@ export function ProjectActivationMatrix({
     onSearch();
   };
   return (
-    <section className="panel activation-matrix-panel">
+    <Localized><section className="panel activation-matrix-panel">
       <div className="panel-heading activation-heading">
         <div>
           <h3>Agent 全局安装</h3>
@@ -176,7 +177,7 @@ export function ProjectActivationMatrix({
           当前显示前 {matrix.rows.length} 项；继续输入更具体的名称或能力可缩小范围。
         </p>
       )}
-    </section>
+    </section></Localized>
   );
 }
 
@@ -218,32 +219,32 @@ function ActivationCellControl({
       : cell.path;
   if (cell.state === "managed") {
     return (
-      <button
+      <Localized><button
         type="button"
         className="activation-control state-managed"
-        title={"卸载受管软链接：" + cell.path}
+        title={translate(`卸载受管软链接：${cell.path}`, `Uninstall managed symlink: ${cell.path}`)}
         disabled={Boolean(busy)}
         onClick={() => onUninstall(row, cell, target)}
       >
         {icon}<span>{activationStateLabel(cell.state)}</span><Unlink size={12} />
-      </button>
+      </button></Localized>
     );
   }
   if (cell.state === "drift") {
     return (
-      <button
+      <Localized><button
         type="button"
         className="activation-control state-drift"
         title="打开系统项目检查漂移后再处理"
         onClick={() => onOpenTarget(target)}
       >
         {icon}<span>{activationStateLabel(cell.state)}</span>
-      </button>
+      </button></Localized>
     );
   }
   if (cell.state === "external-match") {
     return (
-      <button
+      <Localized><button
         type="button"
         className="activation-control state-external"
         title={title}
@@ -251,12 +252,12 @@ function ActivationCellControl({
         onClick={() => onAdopt(row, cell, target)}
       >
         {icon}<span>{activationStateLabel(cell.state)}</span>
-      </button>
+      </button></Localized>
     );
   }
   if (cell.state === "absent") {
     return (
-      <button
+      <Localized><button
         type="button"
         className="activation-control state-absent"
         title={title}
@@ -264,16 +265,16 @@ function ActivationCellControl({
         onClick={() => onInstall(row, cell, target)}
       >
         {icon}<span>{activationStateLabel(cell.state)}</span>
-      </button>
+      </button></Localized>
     );
   }
   return (
-    <span
+    <Localized><span
       className={"activation-control passive state-" + cell.state}
       title={cell.path}
     >
       {icon}<span>{activationStateLabel(cell.state)}</span>
-    </span>
+    </span></Localized>
   );
 }
 
@@ -317,7 +318,7 @@ export function ProjectProfilesPanel({
   onCapture: () => void;
 }) {
   return (
-    <section className="panel project-profile-panel">
+    <Localized><section className="panel project-profile-panel">
       <div className="panel-heading">
         <div>
           <h3>Skill 配置集</h3>
@@ -484,7 +485,7 @@ export function ProjectProfilesPanel({
           >
             {busy === "profile-apply" ? <LoaderCircle className="spin" size={15} /> : <PackageCheck size={15} />}
             {preview.can_apply
-              ? "应用配置集 · " + preview.counts.install + " 项变更"
+              ? translate(`应用配置集 · ${preview.counts.install} 项变更`, `Apply profile · ${preview.counts.install} changes`)
               : "请先解决冲突或未解析项"}
           </button>
         </div>
@@ -511,6 +512,6 @@ export function ProjectProfilesPanel({
           保存当前组合
         </button>
       </div>
-    </section>
+    </section></Localized>
   );
 }
