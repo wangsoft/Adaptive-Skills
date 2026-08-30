@@ -88,6 +88,31 @@ class ScannerTests(unittest.TestCase):
                 "spec.directory-name", {finding.rule for finding in skill.validation}
             )
 
+    def test_scan_accepts_root_skill_when_repository_name_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo = init_repo(Path(raw) / "owner-repository")
+            skill_file = repo / "SKILL.md"
+            skill_file.write_text(
+                "---\n"
+                "name: eli5\n"
+                "description: Explain unfamiliar mechanisms in plain language.\n"
+                "---\n"
+                "Build understanding from the smallest useful model.\n",
+                encoding="utf-8",
+            )
+
+            skill = scan_skill(
+                "58e36acd-7337-4a5f-9a71-a9067bb70ba7", repo, skill_file
+            )
+
+            self.assertTrue(skill.valid)
+            self.assertEqual(skill.rel_path, ".")
+            self.assertEqual(skill.directory_name, "owner-repository")
+            self.assertEqual(skill.name, "eli5")
+            self.assertNotIn(
+                "spec.directory-name", {finding.rule for finding in skill.validation}
+            )
+
     def test_scan_rejects_nested_required_scalar_fields(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             repo = init_repo(Path(raw) / "repo")

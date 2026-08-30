@@ -19,7 +19,8 @@ class SourceRefreshService:
     def reconcile(self) -> dict[str, Any]:
         """Register and scan newly cloned top-level Git repositories."""
         results: list[dict[str, Any]] = []
-        discovered = self.sources.discover()
+        discovery = self.sources.discover_detailed()
+        discovered = discovery["sources"]
         for source in discovered:
             try:
                 scan = self.scanner.scan(source["id"])[0]
@@ -41,6 +42,7 @@ class SourceRefreshService:
                         "error": str(exc),
                     }
                 )
+        results.extend(discovery["failures"])
         return {
             "discovered": len(discovered),
             "scanned": sum(item["status"] == "scanned" for item in results),

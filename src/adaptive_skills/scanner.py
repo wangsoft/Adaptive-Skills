@@ -18,6 +18,7 @@ from .sources import SourceManager, git_head
 
 
 PRUNED_DIRECTORIES = {
+    ".adaptive-skills",
     ".git",
     ".hg",
     ".svn",
@@ -655,7 +656,7 @@ def scan_skill(source_id: str, source_root: Path, skill_file: Path) -> ScannedSk
                 1,
             )
         )
-    elif name != directory_name:
+    elif rel_path != "." and name != directory_name:
         validation.append(
             Finding(
                 "high",

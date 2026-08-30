@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from .config import Settings
 from .database import Database, path_is_within, row_dict, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
+from .operation_lock import serialized_catalog_operation
 
 
 SOURCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
@@ -71,21 +72,153 @@ def validate_git_url(url: str) -> None:
         )
 
 
+def _git_url_identity(url: str | None) -> str | None:
+    if not url:
+        return None
+    value = url.strip().rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+    parsed = urlparse(value)
+    if parsed.scheme == "file":
+        return f"file:{Path(parsed.path).resolve()}"
+    if parsed.scheme:
+        host = (parsed.hostname or parsed.netloc).casefold()
+        path = parsed.path.strip("/")
+        return f"remote:{host}:{path}"
+    if re.match(r"^[^/@\s]+@[^:\s]+:.+", value):
+        host, path = value.split(":", 1)
+        return f"remote:{host.rsplit('@', 1)[-1].casefold()}:{path.strip('/')}"
+    return value
+
+
+def _source_owner(value: str | None) -> str | None:
+    if not value:
+        return None
+    parsed = urlparse(value)
+    path = parsed.path
+    if not parsed.scheme and re.match(r"^[^/@\s]+@[^:\s]+:.+", value):
+        path = value.split(":", 1)[1]
+    parts = [part for part in path.rstrip("/").split("/") if part]
+    if len(parts) < 2:
+        return None
+    owner = re.sub(r"[^A-Za-z0-9._-]+", "-", parts[-2]).strip("-.")
+    return owner or None
+
+
 class SourceManager:
     def __init__(self, settings: Settings, database: Database | None = None):
         self.settings = settings
         self.database = database or Database(settings)
 
+    @serialized_catalog_operation
     def add(
         self, url: str, name: str | None = None, tracked_ref: str | None = None
     ) -> dict:
         validate_git_url(url)
-        source_name = validate_source_name(name or derive_source_name(url))
         self.settings.ensure()
+        existing = self.list(include_removed=True)
+        identity = _git_url_identity(url)
+        same_remote = next(
+            (
+                item
+                for item in existing
+                if identity is not None
+                and _git_url_identity(item.get("url")) == identity
+            ),
+            None,
+        )
+        if same_remote is not None:
+            if same_remote["status"] == "removed":
+                raise ConflictError(
+                    f"Source is in removed history: {same_remote['name']}; restore it or permanently forget that record before cloning the same repository"
+                )
+            if not os.path.lexists(same_remote["local_path"]):
+                if name is not None and name.casefold() != same_remote["name"].casefold():
+                    raise ConflictError(
+                        f"The missing repository is already registered as {same_remote['name']}; leave the display name empty or use that existing name to restore it"
+                    )
+                return self._recover_missing_remote(
+                    same_remote,
+                    url=url,
+                    tracked_ref=tracked_ref,
+                )
+            raise ConflictError(f"Source repository is already registered: {same_remote['name']}")
+        if name is not None:
+            source_name = validate_source_name(name)
+            self._assert_name_available(source_name, existing)
+            destination = self.settings.sources_dir / source_name
+            if os.path.lexists(destination):
+                raise ConflictError(f"Source destination already exists: {destination}")
+        else:
+            source_name = self._available_name(
+                derive_source_name(url),
+                url=url,
+                rows=existing,
+                require_free_destination=True,
+            )
         destination = self.settings.sources_dir / source_name
+
+        self._clone_repository(url, destination, tracked_ref)
+        try:
+            return self._insert(source_name, destination, url, tracked_ref)
+        except Exception:
+            # The clone remains recoverable and visible if catalog registration fails.
+            raise
+
+    def _recover_missing_remote(
+        self,
+        item: dict,
+        *,
+        url: str,
+        tracked_ref: str | None,
+    ) -> dict:
+        destination = Path(item["local_path"]).expanduser().absolute()
+        sources_root = self.settings.sources_dir.resolve()
+        if destination.parent.resolve() != sources_root:
+            raise ConflictError(
+                f"The registered repository directory is missing outside the managed Skill library: {destination}; restore that directory or permanently forget the source record first"
+            )
+        if item.get("update_policy", "remote") != "remote":
+            raise ConflictError(
+                f"The missing source is marked local-maintained: {item['name']}; switch it to remote-following or permanently forget the record before cloning"
+            )
         if os.path.lexists(destination):
             raise ConflictError(f"Source destination already exists: {destination}")
 
+        recovery_ref = tracked_ref or item.get("tracked_ref")
+        self._clone_repository(url, destination, recovery_ref)
+        now = utc_now()
+        with self.database.transaction() as connection:
+            current = connection.execute(
+                "SELECT status, url, local_path, updated_at FROM sources WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+            if (
+                current is None
+                or current["status"] == "removed"
+                or current["local_path"] != item["local_path"]
+                or current["updated_at"] != item["updated_at"]
+                or _git_url_identity(current["url"]) != _git_url_identity(item["url"])
+            ):
+                raise ConflictError(
+                    "The source record changed while its missing repository was being restored; the cloned directory was retained for manual reconciliation"
+                )
+            connection.execute(
+                """
+                UPDATE sources
+                SET url = ?, tracked_ref = ?, head_sha = ?, status = 'registered',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (url, recovery_ref, git_head(destination), now, item["id"]),
+            )
+        result = self.get(item["id"])
+        result["recovered"] = True
+        return result
+
+    def _clone_repository(
+        self, url: str, destination: Path, tracked_ref: str | None
+    ) -> None:
         temporary = (
             self.settings.sources_dir / f".adaptive-skills-clone-{uuid.uuid4().hex}"
         )
@@ -99,11 +232,6 @@ class SourceManager:
         except Exception:
             if temporary.exists():
                 shutil.rmtree(temporary)
-            raise
-        try:
-            return self._insert(source_name, destination, url, tracked_ref)
-        except Exception:
-            # The clone remains recoverable and visible if catalog registration fails.
             raise
 
     def register(
@@ -128,6 +256,25 @@ class SourceManager:
         if url is None:
             remote = _run_git(local_path, "remote", "get-url", "origin", check=False)
             url = remote.stdout.strip() if remote.returncode == 0 else None
+        rows = self.list(include_removed=True)
+        for item in rows:
+            if Path(item["local_path"]).resolve() != local_path:
+                continue
+            if item["status"] == "removed":
+                raise ConflictError(
+                    f"A removed source record still owns this path: {item['name']}; restore it or permanently forget the record first"
+                )
+            raise ConflictError(f"Source path is already registered: {item['name']}")
+        if name is not None:
+            source_name = validate_source_name(name)
+            self._assert_name_available(source_name, rows)
+        else:
+            source_name = self._available_name(
+                local_path.name,
+                url=url,
+                rows=rows,
+                require_free_destination=False,
+            )
         return self._insert(source_name, local_path, url, tracked_ref)
 
     def register_local(
@@ -159,16 +306,30 @@ class SourceManager:
         )
 
     def discover(self) -> list[dict]:
+        return self.discover_detailed()["sources"]
+
+    def discover_detailed(self) -> dict:
         self.settings.ensure()
         added: list[dict] = []
-        known = {Path(item["local_path"]).resolve() for item in self.list()}
+        failures: list[dict] = []
+        rows = self.list(include_removed=True)
+        active_paths = {
+            Path(item["local_path"]).resolve()
+            for item in rows
+            if item["status"] != "removed"
+        }
+        removed_paths = {
+            Path(item["local_path"]).resolve(): item
+            for item in rows
+            if item["status"] == "removed"
+        }
         for child in sorted(
             self.settings.library.iterdir(), key=lambda item: item.name.casefold()
         ):
             if (
                 child.name.startswith(".")
                 or not child.is_dir()
-                or child.resolve() in known
+                or child.resolve() in active_paths
             ):
                 continue
             probe = _run_git(child, "rev-parse", "--show-toplevel", check=False)
@@ -176,8 +337,103 @@ class SourceManager:
                 probe.returncode == 0
                 and Path(probe.stdout.strip()).resolve() == child.resolve()
             ):
-                added.append(self.register(child))
-        return added
+                removed = removed_paths.get(child.resolve())
+                if removed is not None:
+                    remote = _run_git(
+                        child, "remote", "get-url", "origin", check=False
+                    )
+                    current_url = remote.stdout.strip() if remote.returncode == 0 else None
+                    same_remote = bool(current_url or removed.get("url")) and (
+                        _git_url_identity(current_url)
+                        == _git_url_identity(removed.get("url"))
+                    )
+                    current_head = git_head(child)
+                    removed_head = removed.get("head_sha")
+                    same_local_head = (
+                        not current_url
+                        and not removed.get("url")
+                        and current_head is not None
+                        and removed_head is not None
+                        and current_head == removed_head
+                    )
+                    if same_remote or same_local_head:
+                        continue
+                    failures.append(
+                        {
+                            "source_id": removed["id"],
+                            "source": child.name,
+                            "path": str(child.resolve()),
+                            "status": "failed",
+                            "type": "ConflictError",
+                            "error": (
+                                f"A different repository now uses the path of removed source {removed['name']}; permanently forget that history record, then discover again"
+                            ),
+                        }
+                    )
+                    continue
+                try:
+                    added.append(self.register(child))
+                except (ConflictError, ValidationError, NotFoundError) as exc:
+                    failures.append(
+                        {
+                            "source_id": str(child.resolve()),
+                            "source": child.name,
+                            "path": str(child.resolve()),
+                            "status": "failed",
+                            "type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
+        return {"sources": added, "failures": failures}
+
+    def _assert_name_available(self, name: str, rows: list[dict] | None = None) -> None:
+        existing = rows if rows is not None else self.list(include_removed=True)
+        conflict = next(
+            (item for item in existing if item["name"].casefold() == name.casefold()),
+            None,
+        )
+        if conflict is None:
+            return
+        qualifier = "removed history" if conflict["status"] == "removed" else "catalog"
+        raise ConflictError(
+            f"Source name is already registered in {qualifier}: {conflict['name']}"
+        )
+
+    def _available_name(
+        self,
+        base: str,
+        *,
+        url: str | None,
+        rows: list[dict],
+        require_free_destination: bool,
+    ) -> str:
+        base = validate_source_name(base)
+        owner = _source_owner(url)
+        seeds = [base]
+        if owner and owner.casefold() != base.casefold():
+            owner_part = owner[:39]
+            prefix = f"{owner_part}-"
+            seeds.append(f"{prefix}{base[: 80 - len(prefix)]}")
+        taken = {item["name"].casefold() for item in rows}
+
+        def available(candidate: str) -> bool:
+            if candidate.casefold() in taken:
+                return False
+            return not (
+                require_free_destination
+                and os.path.lexists(self.settings.sources_dir / candidate)
+            )
+
+        for candidate in seeds:
+            candidate = validate_source_name(candidate)
+            if available(candidate):
+                return candidate
+        for index in range(2, 10_000):
+            suffix = f"-{index}"
+            candidate = validate_source_name(f"{base[: 80 - len(suffix)]}{suffix}")
+            if available(candidate):
+                return candidate
+        raise ConflictError(f"Could not allocate a unique source name for: {base}")
 
     def _insert(
         self,
@@ -221,17 +477,22 @@ class SourceManager:
             raise
         return self.get(source_id)
 
-    def list(self) -> list[dict]:
+    def list(self, *, include_removed: bool = False) -> list[dict]:
+        clause = "" if include_removed else "WHERE status != 'removed'"
         with self.database.transaction() as connection:
             return [
                 dict(row)
-                for row in connection.execute("SELECT * FROM sources ORDER BY name")
+                for row in connection.execute(
+                    f"SELECT * FROM sources {clause} ORDER BY name"
+                )
             ]
 
-    def get(self, source: str) -> dict:
+    def get(self, source: str, *, include_removed: bool = False) -> dict:
+        clause = "" if include_removed else "AND status != 'removed'"
         with self.database.transaction() as connection:
             row = connection.execute(
-                "SELECT * FROM sources WHERE id = ? OR name = ?", (source, source)
+                f"SELECT * FROM sources WHERE (id = ? OR name = ?) {clause}",
+                (source, source),
             ).fetchone()
         value = row_dict(row)
         if value is None:

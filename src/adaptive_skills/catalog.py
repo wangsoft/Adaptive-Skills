@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .database import Database, json_value, utc_now
+from .database import Database, json_value, path_is_within, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
 from .scanner import CatalogScanner, decorate_audit_findings
 
@@ -50,6 +51,7 @@ class Catalog:
                 f"""
                 SELECT s.*, src.name AS source_name, src.url AS source_url,
                        src.local_path AS source_path, src.tracked_ref, src.head_sha,
+                       src.status AS source_status,
                        a.category_l1, a.category_l2, a.problem, a.use_case,
                        a.score, a.score_source, a.notes, a.tags_json, a.review_status,
                        a.content_hash AS annotation_content_hash
@@ -86,6 +88,7 @@ class Catalog:
                 f"""
                 SELECT s.*, src.name AS source_name, src.url AS source_url,
                        src.local_path AS source_path, src.tracked_ref, src.head_sha,
+                       src.status AS source_status,
                        a.category_l1, a.category_l2, a.problem, a.use_case,
                        a.score, a.score_source, a.notes, a.tags_json, a.review_status,
                        a.content_hash AS annotation_content_hash
@@ -107,6 +110,9 @@ class Catalog:
         limit: int = 10,
         include_invalid: bool = False,
         allow_risk: bool = False,
+        scope_root: str | Path | None = None,
+        unique_names: bool = False,
+        preferred_rel_prefixes: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         if not requirement.strip():
             raise ValidationError("Search requirement cannot be empty")
@@ -122,11 +128,21 @@ class Catalog:
         candidates = self.list_skills()
         results: list[dict[str, Any]] = []
         full_query = requirement.casefold().strip()
+        resolved_scope = (
+            Path(scope_root).expanduser().resolve() if scope_root is not None else None
+        )
         for skill in candidates:
             if not include_invalid and not skill["valid"]:
                 continue
             if not allow_risk and skill["audit_severity"] in {"high", "critical"}:
                 continue
+            if resolved_scope is not None:
+                source_root = Path(skill["source_path"])
+                skill_root = source_root / skill["rel_path"]
+                if not path_is_within(source_root, resolved_scope) or not path_is_within(
+                    skill_root, resolved_scope
+                ):
+                    continue
             fields = {
                 "name": skill["name"],
                 "description": skill["description"],
@@ -178,6 +194,7 @@ class Catalog:
                     "name": skill["name"],
                     "description": skill["description"],
                     "source": skill["source_name"],
+                    "source_name": skill["source_name"],
                     "rel_path": skill["rel_path"],
                     "valid": skill["valid"],
                     "audit_severity": skill["audit_severity"],
@@ -192,7 +209,41 @@ class Catalog:
                 }
             )
         results.sort(key=lambda item: (-item["score"], item["name"], item["id"]))
+        if unique_names:
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for item in results:
+                grouped.setdefault(item["name"].casefold(), []).append(item)
+            results = []
+            for variants in grouped.values():
+                winner = min(
+                    variants,
+                    key=lambda item: (
+                        self._rel_path_preference(
+                            item["rel_path"], preferred_rel_prefixes
+                        ),
+                        -item["score"],
+                        -(item["annotation_score"] or 0.0),
+                        item["rel_path"].casefold(),
+                        item["id"],
+                    ),
+                ).copy()
+                winner["variant_count"] = len(variants)
+                results.append(winner)
+            results.sort(
+                key=lambda item: (-item["score"], item["name"], item["id"])
+            )
         return results[:limit]
+
+    @staticmethod
+    def _rel_path_preference(
+        rel_path: str, preferred_rel_prefixes: tuple[str, ...]
+    ) -> int:
+        normalized = rel_path.strip("/").casefold()
+        for index, raw_prefix in enumerate(preferred_rel_prefixes):
+            prefix = raw_prefix.strip("/").casefold()
+            if normalized == prefix or normalized.startswith(f"{prefix}/"):
+                return index
+        return len(preferred_rel_prefixes)
 
     def _fts_ranks(self, requirement: str, terms: list[str]) -> dict[str, float]:
         full_cjk = CJK_SEQUENCE.findall(requirement.casefold())

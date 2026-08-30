@@ -4,6 +4,7 @@ import {
   bootstrapImportArgs,
   bootstrapInstallArgs,
   projectApplyArgs,
+  projectAdoptArgs,
   projectHistoryArgs,
   projectPlanArgs,
   snapshotArgs,
@@ -11,12 +12,26 @@ import {
   sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
+  sourceRemovalPreviewArgs,
+  sourceRemoveArgs,
+  sourceRestoreArgs,
+  sourceForgetPreviewArgs,
+  sourceForgetArgs,
   llmClearErrorsArgs,
   llmConfigArgs,
   llmEvaluateArgs,
   llmProfileSaveArgs,
   llmReviewArgs,
   auditReviewArgs,
+  agentTargetArgs,
+  profileApplyArgs,
+  profileCaptureArgs,
+  profileDeleteArgs,
+  profileExportArgs,
+  profileImportArgs,
+  profileImportPreviewArgs,
+  profilePreviewArgs,
+  projectMatrixArgs,
 } from "./commands";
 
 describe("desktop command contract", () => {
@@ -48,6 +63,22 @@ describe("desktop command contract", () => {
     expect(projectPlanArgs("/tmp/project", "install tools", "auto", true)).toContain("--allow-risk");
   });
 
+  it("supports exact category browsing without requiring search text", () => {
+    expect(projectPlanArgs(
+      "/tmp/project",
+      "",
+      "auto",
+      false,
+      "前端与设计",
+      "界面设计",
+    )).toEqual([
+      "project", "plan", "/tmp/project",
+      "--category-l1", "前端与设计",
+      "--category-l2", "界面设计",
+      "--target", "auto", "--limit", "20",
+    ]);
+  });
+
   it("uses one explicit command for refreshing every source", () => {
     expect(sourceRefreshAllArgs()).toEqual(["source", "refresh-all"]);
   });
@@ -62,10 +93,53 @@ describe("desktop command contract", () => {
     ]);
   });
 
+  it("binds source removal to a preview and makes reference retention explicit", () => {
+    expect(sourceRemovalPreviewArgs("source-id")).toEqual([
+      "source", "remove-preview", "source-id",
+    ]);
+    expect(sourceRemoveArgs("source-id", "a".repeat(64), true)).toEqual([
+      "source", "remove", "source-id", "--expected-digest", "a".repeat(64),
+    ]);
+    expect(sourceRemoveArgs("source-id", "b".repeat(64), false)).toEqual([
+      "source", "remove", "source-id", "--expected-digest", "b".repeat(64),
+      "--keep-references",
+    ]);
+    expect(sourceRestoreArgs("source-id")).toEqual([
+      "source", "restore", "source-id",
+    ]);
+    expect(sourceForgetPreviewArgs("source-id")).toEqual([
+      "source", "forget-preview", "source-id",
+    ]);
+    expect(sourceForgetArgs("source-id", "c".repeat(64))).toEqual([
+      "source", "forget", "source-id", "--expected-digest", "c".repeat(64),
+    ]);
+  });
+
   it("requests bounded project history for one explicit project", () => {
     expect(projectHistoryArgs("/tmp/project with spaces", 25)).toEqual([
       "project", "history", "/tmp/project with spaces", "--limit", "25",
     ]);
+  });
+
+  it("keeps external Skill association explicit and risk-gated", () => {
+    expect(projectAdoptArgs(
+      "/tmp/global skills",
+      "presentation-maker",
+      "stable-skill-id",
+      true,
+    )).toEqual([
+      "project", "adopt", "/tmp/global skills",
+      "--entry", "presentation-maker",
+      "--skill", "stable-skill-id",
+      "--allow-risk",
+    ]);
+    expect(projectAdoptArgs(
+      "/tmp/global skills",
+      "presentation-maker",
+      "stable-skill-id",
+      false,
+      true,
+    )).toContain("--replace-content");
   });
 
   it("keeps LLM provider settings and review actions explicit", () => {
@@ -131,6 +205,40 @@ describe("desktop command contract", () => {
   it("emits one explicit flag for every curated starter source", () => {
     expect(bootstrapInstallArgs(["openai-plugins", "superpowers"])).toEqual([
       "bootstrap", "install", "--starter", "openai-plugins", "--starter", "superpowers",
+    ]);
+  });
+
+  it("keeps Agent matrix and profile actions explicit", () => {
+    expect(agentTargetArgs()).toEqual(["agent", "list"]);
+    expect(projectMatrixArgs("presentation tools", 20)).toEqual([
+      "project", "matrix", "--limit", "20", "--query", "presentation tools",
+    ]);
+    expect(profileCaptureArgs("/tmp/project one", "前端配置")).toEqual([
+      "profile", "capture", "/tmp/project one", "--name", "前端配置",
+    ]);
+    expect(profilePreviewArgs("profile-1", "/tmp/project", "claude", false)).toEqual([
+      "profile", "preview", "profile-1", "/tmp/project", "--target", "claude",
+    ]);
+    expect(profileApplyArgs("profile-1", "/tmp/project", "root", true)).toContain(
+      "--allow-risk",
+    );
+    expect(profileDeleteArgs("profile-1")).toEqual([
+      "profile", "delete", "profile-1",
+    ]);
+    expect(profileExportArgs(
+      "profile-1",
+      "/tmp/configuration set.json",
+      true,
+    )).toEqual([
+      "profile", "export", "profile-1",
+      "--output", "/tmp/configuration set.json", "--overwrite",
+    ]);
+    expect(profileImportPreviewArgs("/tmp/import profile.json")).toEqual([
+      "profile", "import-preview", "/tmp/import profile.json",
+    ]);
+    expect(profileImportArgs("/tmp/import profile.json", "sha256-value")).toEqual([
+      "profile", "import", "/tmp/import profile.json",
+      "--expected-sha256", "sha256-value",
     ]);
   });
 });

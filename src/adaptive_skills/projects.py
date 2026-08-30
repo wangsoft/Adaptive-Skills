@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -9,10 +10,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .agent_scopes import default_agent_roots
+from .agent_targets import get_agent_target
 from .catalog import Catalog
 from .config import Settings
 from .database import Database, path_is_within, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
+from .operation_lock import serialized_catalog_operation
+from .provider_skills import provider_skill_info
 from .scanner import hash_skill_tree
 
 
@@ -20,13 +25,10 @@ MANIFEST_SCHEMA = "adaptive-skills-project/1"
 MANIFEST_DIRECTORY = ".adaptive-skills"
 MANIFEST_FILE = "manifest.json"
 HISTORY_LIMIT = 100
-HISTORY_ACTIONS = {"apply", "sync", "unlink"}
-TARGETS = {
-    "auto": Path(".agents/skills"),
-    "universal": Path(".agents/skills"),
-    "codex": Path(".agents/skills"),
-    "claude": Path(".claude/skills"),
-}
+HISTORY_ACTIONS = {"apply", "adopt", "sync", "unlink"}
+SYSTEM_PROJECT_PREFIX = "system:"
+EXTERNAL_BACKUP_DIRECTORY = Path(MANIFEST_DIRECTORY) / "external-backups"
+BACKUP_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
 def _lexists(path: Path) -> bool:
@@ -110,6 +112,16 @@ class ProjectManager:
             }:
                 raise ValidationError(f"Malformed project manifest entry: {path}")
             _safe_entry_path(project, entry["path"])
+            adopted_backup = entry.get("adopted_backup")
+            if adopted_backup is not None:
+                if not isinstance(adopted_backup, str):
+                    raise ValidationError(f"Malformed project manifest entry: {path}")
+                backup_path = _safe_entry_path(project, adopted_backup)
+                expected_root = Path(os.path.abspath(project / EXTERNAL_BACKUP_DIRECTORY))
+                try:
+                    backup_path.relative_to(expected_root)
+                except ValueError:
+                    raise ValidationError(f"Unsafe adopted backup path: {path}")
         history = manifest.get("history", [])
         if not isinstance(history, list):
             raise ValidationError(f"Malformed project manifest history: {path}")
@@ -143,6 +155,9 @@ class ProjectManager:
     def _register_manifest(
         self, project: Path, manifest: dict[str, Any]
     ) -> dict[str, Any]:
+        scope = self._system_scope(project)
+        if scope is not None:
+            return self._system_summary(scope, manifest)
         now = utc_now()
         project_id = str(uuid.uuid4())
         activity = self._last_activity(manifest)
@@ -175,14 +190,19 @@ class ProjectManager:
             ).fetchone()
         return self._summary(dict(row), project=project, manifest=manifest)
 
+    @serialized_catalog_operation
     def register(self, project: str | Path) -> dict[str, Any]:
         root = _safe_project(project)
+        scope = self._system_scope(root)
+        if scope is not None:
+            return self._system_summary(scope, self.load_manifest(root))
         if not self.manifest_path(root).is_file():
             raise ValidationError(
                 "Only projects with an adaptive-skills manifest can be registered"
             )
         return self._register_manifest(root, self.load_manifest(root))
 
+    @serialized_catalog_operation
     def list_projects(self) -> list[dict[str, Any]]:
         with self.database.transaction() as connection:
             rows = connection.execute(
@@ -192,10 +212,14 @@ class ProjectManager:
                          display_name COLLATE NOCASE, id
                 """
             ).fetchall()
-        results: list[dict[str, Any]] = []
+        system_projects = self._system_projects()
+        system_paths = {item["path"] for item in system_projects}
+        results: list[dict[str, Any]] = system_projects
         observed: list[tuple[str, str | None, str | None, str]] = []
         for raw in rows:
             row = dict(raw)
+            if row["path"] in system_paths:
+                continue
             path = Path(row["path"])
             if not path.is_dir():
                 summary = self._summary(row, status="missing")
@@ -237,8 +261,11 @@ class ProjectManager:
                 )
         return results
 
+    @serialized_catalog_operation
     def forget(self, project_id_or_path: str | Path) -> dict[str, Any]:
         value = str(project_id_or_path)
+        if value.startswith(SYSTEM_PROJECT_PREFIX) or self._system_scope_value(value):
+            raise ValidationError("System Agent projects cannot be forgotten")
         with self.database.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM managed_projects WHERE id = ?", (value,)
@@ -253,7 +280,10 @@ class ProjectManager:
             connection.execute("DELETE FROM managed_projects WHERE id = ?", (row["id"],))
         return {"forgotten": True, "id": row["id"], "path": row["path"]}
 
+    @serialized_catalog_operation
     def relink(self, project_id: str, new_path: str | Path) -> dict[str, Any]:
+        if project_id.startswith(SYSTEM_PROJECT_PREFIX):
+            raise ValidationError("System Agent projects cannot be relinked")
         root = _safe_project(new_path)
         if not self.manifest_path(root).is_file():
             raise ValidationError(
@@ -327,7 +357,99 @@ class ProjectManager:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "problem": problem,
+            "project_kind": "project",
+            "system_scope": None,
+            "protected": False,
+            "external_count": 0,
         }
+
+    def _system_projects(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for scope in default_agent_roots():
+            if not scope["exists"]:
+                continue
+            root = Path(scope["path"])
+            try:
+                results.append(self._system_summary(scope, self.load_manifest(root)))
+            except (OSError, ValidationError):
+                results.append(
+                    self._system_summary(
+                        scope,
+                        {"entries": [], "history": []},
+                        status="invalid",
+                        problem="System project manifest is invalid",
+                    )
+                )
+        return results
+
+    def _system_summary(
+        self,
+        scope: dict[str, Any],
+        manifest: dict[str, Any],
+        *,
+        status: str = "active",
+        problem: str | None = None,
+    ) -> dict[str, Any]:
+        root = Path(scope["path"])
+        manifest_present = self.manifest_path(root).is_file()
+        entries = (
+            [self._entry_status(root, entry) for entry in manifest["entries"]]
+            if status == "active"
+            else []
+        )
+        return {
+            "id": f"{SYSTEM_PROJECT_PREFIX}{scope['id']}",
+            "path": str(root),
+            "display_name": f"{scope['label']} · 全局 Skills",
+            "status": status,
+            "entry_count": len(entries),
+            "history_count": len(manifest.get("history", [])),
+            "clean": status == "active"
+            and all(entry["state"] == "clean" for entry in entries),
+            "last_activity_at": self._last_activity(manifest)
+            if manifest_present
+            else None,
+            "created_at": None,
+            "updated_at": manifest.get("updated_at") if manifest_present else None,
+            "problem": problem,
+            "project_kind": "system",
+            "system_scope": scope["id"],
+            "protected": True,
+            "external_count": self._external_count(root, manifest),
+        }
+
+    @staticmethod
+    def _system_scope_value(value: str) -> dict[str, Any] | None:
+        try:
+            candidate = Path(value).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return None
+        return next(
+            (
+                scope
+                for scope in default_agent_roots()
+                if Path(scope["path"]).expanduser().resolve() == candidate
+            ),
+            None,
+        )
+
+    def _system_scope(self, project: Path) -> dict[str, Any] | None:
+        return self._system_scope_value(str(project))
+
+    @staticmethod
+    def _external_count(root: Path, manifest: dict[str, Any]) -> int:
+        managed = {entry["path"] for entry in manifest["entries"]}
+        try:
+            children = list(root.iterdir())
+        except OSError:
+            return 0
+        return sum(
+            1
+            for child in children
+            if not child.name.startswith(".")
+            and child.name not in managed
+            and (child / "SKILL.md").is_file()
+        )
 
     @staticmethod
     def _append_history(
@@ -346,23 +468,410 @@ class ProjectManager:
     def plan(
         self,
         project: str | Path,
-        requirement: str,
+        requirement: str | None = None,
         *,
         limit: int = 5,
         target: str = "auto",
         allow_risk: bool = False,
+        category_l1: str | None = None,
+        category_l2: str | None = None,
     ) -> dict[str, Any]:
         root = _safe_project(project)
-        target_root = self._target_path(target)
+        target_root = self._target_path(target, root)
+        normalized_requirement = (requirement or "").strip()
+        normalized_l1 = (category_l1 or "").strip()
+        normalized_l2 = (category_l2 or "").strip()
+        if normalized_requirement and normalized_l1:
+            raise ValidationError(
+                "Choose either a requirement search or category browsing"
+            )
+        if normalized_l2 and not normalized_l1:
+            raise ValidationError("A level-two category requires a level-one category")
+        if not normalized_requirement and not normalized_l1:
+            raise ValidationError("A requirement or level-one category is required")
+        manifest = self.load_manifest(root)
+        by_path = {entry["path"]: entry for entry in manifest["entries"]}
+        prefixes = self._recommendation_prefixes(target, root)
+        if normalized_l1:
+            recommendations = self._category_recommendations(
+                normalized_l1,
+                normalized_l2 or None,
+                limit=limit,
+                allow_risk=allow_risk,
+                preferred_rel_prefixes=prefixes,
+            )
+            discovery_mode = "category"
+            plan_requirement = "分类浏览：" + normalized_l1
+            if normalized_l2:
+                plan_requirement += " / " + normalized_l2
+        else:
+            recommendations = self.catalog.search(
+                normalized_requirement,
+                limit=limit,
+                allow_risk=allow_risk,
+                scope_root=self.settings.library,
+                unique_names=True,
+                preferred_rel_prefixes=prefixes,
+            )
+            discovery_mode = "requirement"
+            plan_requirement = normalized_requirement
+        for skill in recommendations:
+            relative = (target_root / skill["name"]).as_posix()
+            destination = _safe_entry_path(root, relative)
+            managed = by_path.get(relative)
+            if managed is not None:
+                status = self._entry_status(root, managed)
+                skill["project_selection_state"] = (
+                    "installed"
+                    if managed["skill_id"] == skill["id"]
+                    else "managed-conflict"
+                )
+                skill["project_entry_state"] = status["state"]
+                skill["project_entry_skill_id"] = managed["skill_id"]
+                skill["project_entry_path"] = relative
+            elif _lexists(destination):
+                skill["project_selection_state"] = "path-conflict"
+                skill["project_entry_state"] = None
+                skill["project_entry_skill_id"] = None
+                skill["project_entry_path"] = relative
+            else:
+                skill["project_selection_state"] = "available"
+                skill["project_entry_state"] = None
+                skill["project_entry_skill_id"] = None
+                skill["project_entry_path"] = relative
         return {
             "project": str(root),
-            "requirement": requirement,
-            "target": target_root.as_posix(),
-            "recommendations": self.catalog.search(
-                requirement, limit=limit, allow_risk=allow_risk
-            ),
+            "requirement": plan_requirement,
+            "discovery_mode": discovery_mode,
+            "category_l1": normalized_l1 or None,
+            "category_l2": normalized_l2 or None,
+            "target": str(root) if target_root == Path(".") else target_root.as_posix(),
+            "library_root": str(self.settings.library),
+            "recommendations": recommendations,
         }
 
+    def _category_recommendations(
+        self,
+        category_l1: str,
+        category_l2: str | None,
+        *,
+        limit: int,
+        allow_risk: bool,
+        preferred_rel_prefixes: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 100:
+            raise ValidationError("Category browse limit must be between 1 and 100")
+        library = self.settings.library.resolve()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for skill in self.catalog.list_skills():
+            if not skill["valid"]:
+                continue
+            if not allow_risk and skill["audit_severity"] in {"high", "critical"}:
+                continue
+            if skill.get("category_l1") != category_l1:
+                continue
+            if category_l2 and skill.get("category_l2") != category_l2:
+                continue
+            source_root = Path(skill["source_path"])
+            skill_root = source_root / skill["rel_path"]
+            if not path_is_within(source_root, library) or not path_is_within(
+                skill_root, library
+            ):
+                continue
+            grouped.setdefault(skill["name"].casefold(), []).append(skill)
+
+        recommendations: list[dict[str, Any]] = []
+        reason_field = "category_l2" if category_l2 else "category_l1"
+        reason_value = category_l2 or category_l1
+        for variants in grouped.values():
+            winner = min(
+                variants,
+                key=lambda item: (
+                    self.catalog._rel_path_preference(
+                        item["rel_path"], preferred_rel_prefixes
+                    ),
+                    -(item.get("score") or 0.0),
+                    item["audit_severity"] in {"high", "critical"},
+                    item["rel_path"].casefold(),
+                    item["id"],
+                ),
+            )
+            annotation_score = winner.get("score")
+            recommendations.append(
+                {
+                    "id": winner["id"],
+                    "name": winner["name"],
+                    "description": winner["description"],
+                    "source": winner["source_name"],
+                    "source_name": winner["source_name"],
+                    "rel_path": winner["rel_path"],
+                    "valid": winner["valid"],
+                    "audit_severity": winner["audit_severity"],
+                    "format_issue_count": winner["format_issue_count"],
+                    "capability_hint_count": winner["capability_hint_count"],
+                    "unreviewed_risk_count": winner["unreviewed_risk_count"],
+                    "confirmed_risk_count": winner["confirmed_risk_count"],
+                    "false_positive_count": winner["false_positive_count"],
+                    "category_l1": winner.get("category_l1"),
+                    "category_l2": winner.get("category_l2"),
+                    "score": annotation_score,
+                    "annotation_score": annotation_score,
+                    "reason": [
+                        {
+                            "field": reason_field,
+                            "terms": [reason_value],
+                            "contribution": 1.0,
+                        }
+                    ],
+                    "variant_count": len(variants),
+                }
+            )
+        recommendations.sort(
+            key=lambda item: (
+                item["annotation_score"] is None,
+                -(item["annotation_score"] or 0.0),
+                item["name"].casefold(),
+                item["id"],
+            )
+        )
+        return recommendations[:limit]
+
+    def _recommendation_prefixes(
+        self, target: str, project: Path
+    ) -> tuple[str, ...]:
+        scope = self._system_scope(project) if target == "root" else None
+        scope_id = scope["id"] if scope is not None else target
+        return get_agent_target(scope_id).preferred_rel_prefixes
+
+    def activation_matrix(
+        self,
+        *,
+        query: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        if limit < 1 or limit > 100:
+            raise ValidationError("Activation matrix limit must be between 1 and 100")
+        library = self.settings.library.resolve()
+        skills = [
+            skill
+            for skill in self.catalog.list_skills()
+            if path_is_within(Path(skill["source_path"]), library)
+            and path_is_within(
+                Path(skill["source_path"]) / skill["rel_path"], library
+            )
+        ]
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        normalized_query = (query or "").strip().casefold()
+        for skill in skills:
+            searchable = " ".join(
+                str(skill.get(field) or "")
+                for field in (
+                    "name",
+                    "description",
+                    "problem",
+                    "use_case",
+                    "category_l1",
+                    "category_l2",
+                    "source_name",
+                )
+            ).casefold()
+            if normalized_query and normalized_query not in searchable:
+                continue
+            grouped.setdefault(skill["name"].casefold(), []).append(skill)
+
+        targets = default_agent_roots()
+        target_context: dict[str, dict[str, Any]] = {}
+        matrix_targets: list[dict[str, Any]] = []
+        for target in targets:
+            target_view = dict(target)
+            root = Path(target["path"])
+            if not target["exists"]:
+                target_view["status"] = "unavailable"
+                target_view["problem"] = None
+                target_context[target["id"]] = {
+                    "manifest": {"entries": []},
+                    "external": {},
+                    "problem": None,
+                }
+            else:
+                try:
+                    manifest = self.load_manifest(root)
+                    external = {
+                        item["name"].casefold(): item
+                        for item in self._external_entries(root, manifest)
+                    }
+                    target_view["status"] = "available"
+                    target_view["problem"] = None
+                    target_context[target["id"]] = {
+                        "manifest": manifest,
+                        "external": external,
+                        "problem": None,
+                    }
+                except (OSError, ValidationError) as exc:
+                    target_view["status"] = "invalid"
+                    target_view["problem"] = str(exc)
+                    target_context[target["id"]] = {
+                        "manifest": {"entries": []},
+                        "external": {},
+                        "problem": str(exc),
+                    }
+            matrix_targets.append(target_view)
+
+        all_groups = sorted(
+            grouped.values(),
+            key=lambda variants: (variants[0]["name"].casefold(), variants[0]["id"]),
+        )
+        rows: list[dict[str, Any]] = []
+        for variants in all_groups[:limit]:
+            cells: list[dict[str, Any]] = []
+            display_skill = min(
+                variants,
+                key=lambda item: (
+                    not item["valid"],
+                    item["audit_severity"] in {"high", "critical"},
+                    -(item.get("score") or 0.0),
+                    item["rel_path"].casefold(),
+                    item["id"],
+                ),
+            )
+            for target in matrix_targets:
+                candidate = self._matrix_variant(variants, target["id"])
+                cells.append(
+                    self._activation_cell(
+                        target,
+                        target_context[target["id"]],
+                        variants,
+                        candidate,
+                    )
+                )
+            rows.append(
+                {
+                    "name": display_skill["name"],
+                    "description": display_skill["description"],
+                    "variant_count": len(variants),
+                    "cells": cells,
+                }
+            )
+        return {
+            "library_root": str(library),
+            "query": query or "",
+            "limit": limit,
+            "total": len(all_groups),
+            "targets": matrix_targets,
+            "rows": rows,
+        }
+
+    def _matrix_variant(
+        self, variants: list[dict[str, Any]], target_id: str
+    ) -> dict[str, Any]:
+        prefixes = get_agent_target(target_id).preferred_rel_prefixes
+        return min(
+            variants,
+            key=lambda item: (
+                not item["valid"],
+                self.catalog._rel_path_preference(item["rel_path"], prefixes),
+                item["audit_severity"] in {"high", "critical"},
+                -(item.get("score") or 0.0),
+                item["rel_path"].casefold(),
+                item["id"],
+            ),
+        )
+
+    def _activation_cell(
+        self,
+        target: dict[str, Any],
+        context: dict[str, Any],
+        variants: list[dict[str, Any]],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        base = {
+            "target_id": target["id"],
+            "skill_id": candidate["id"],
+            "installed_skill_id": None,
+            "adopt_skill_id": None,
+            "content_match": None,
+            "source_name": candidate["source_name"],
+            "audit_severity": candidate["audit_severity"],
+            "valid": candidate["valid"],
+            "path": str(Path(target["path"]) / candidate["name"]),
+            "detail_state": None,
+            "read_only": False,
+        }
+        if target["status"] != "available":
+            return {
+                **base,
+                "state": "unavailable",
+                "detail_state": target.get("problem") or "directory-missing",
+                "read_only": True,
+            }
+        manifest = context["manifest"]
+        managed = next(
+            (
+                entry
+                for entry in manifest["entries"]
+                if (entry.get("name") or Path(entry["path"]).name).casefold()
+                == candidate["name"].casefold()
+            ),
+            None,
+        )
+        if managed is not None:
+            status = self._entry_status(Path(target["path"]), managed)
+            return {
+                **base,
+                "state": "managed" if status["state"] == "clean" else "drift",
+                "detail_state": status["state"],
+                "installed_skill_id": managed["skill_id"],
+                "path": str(Path(target["path"]) / managed["path"]),
+            }
+        external = context["external"].get(candidate["name"].casefold())
+        if external is not None:
+            variant_ids = {item["id"] for item in variants}
+            match = next(
+                (
+                    item
+                    for item in external["matches"]
+                    if item["id"] == candidate["id"]
+                ),
+                next(
+                    (
+                        item
+                        for item in external["matches"]
+                        if item["id"] in variant_ids
+                    ),
+                    None,
+                ),
+            )
+            matched_base = (
+                {
+                    **base,
+                    "skill_id": match["id"],
+                    "source_name": match["source_name"],
+                    "audit_severity": match["audit_severity"],
+                    "valid": match["valid"],
+                }
+                if match
+                else base
+            )
+            return {
+                **matched_base,
+                "state": "external-match" if match else "external",
+                "adopt_skill_id": match["id"] if match else None,
+                "content_match": match["content_match"] if match else None,
+                "path": str(Path(target["path"]) / external["path"]),
+                "read_only": True,
+            }
+        destination = Path(target["path"]) / candidate["name"]
+        if _lexists(destination):
+            return {
+                **base,
+                "state": "external",
+                "detail_state": "path-collision",
+                "path": str(destination),
+                "read_only": True,
+            }
+        return {**base, "state": "absent"}
+
+    @serialized_catalog_operation
     def apply(
         self,
         project: str | Path,
@@ -378,7 +887,7 @@ class ProjectManager:
             raise ValidationError("At least one --skill is required")
         if mode not in {"auto", "symlink", "copy"}:
             raise ValidationError("Mode must be auto, symlink, or copy")
-        target_root = self._target_path(target)
+        target_root = self._target_path(target, root)
         manifest = self.load_manifest(root)
         by_path = {entry["path"]: entry for entry in manifest["entries"]}
         selected = [self.catalog.get_skill(skill_id) for skill_id in skill_ids]
@@ -461,6 +970,7 @@ class ProjectManager:
                     self._remove_verified(destination, entry, force=True)
             raise
 
+        previous_manifest = json.loads(json.dumps(manifest))
         manifest["entries"] = sorted(by_path.values(), key=lambda entry: entry["path"])
         manifest["updated_at"] = utc_now()
         self._append_history(
@@ -473,7 +983,15 @@ class ProjectManager:
             target=target_root.as_posix(),
             modes=sorted({entry["mode"] for entry in installed}),
         )
-        _atomic_json(self.manifest_path(root), manifest)
+        try:
+            _atomic_json(self.manifest_path(root), manifest)
+        except Exception:
+            for destination, entry in reversed(newly_created):
+                if _lexists(destination):
+                    self._remove_verified(destination, entry, force=True)
+            if self.manifest_path(root).is_file():
+                _atomic_json(self.manifest_path(root), previous_manifest)
+            raise
         self._register_manifest(root, manifest)
         return {
             "project": str(root),
@@ -481,10 +999,12 @@ class ProjectManager:
             "manifest": str(self.manifest_path(root)),
         }
 
+    @serialized_catalog_operation
     def status(self, project: str | Path) -> dict[str, Any]:
         root = _safe_project(project)
         manifest = self.load_manifest(root)
         entries = [self._entry_status(root, entry) for entry in manifest["entries"]]
+        scope = self._system_scope(root)
         managed = self.manifest_path(root).is_file()
         if managed:
             self._register_manifest(root, manifest)
@@ -494,8 +1014,232 @@ class ProjectManager:
             "managed": managed,
             "entries": entries,
             "clean": all(entry["state"] == "clean" for entry in entries),
+            "project_kind": "system" if scope is not None else "project",
+            "system_scope": scope["id"] if scope is not None else None,
+            "protected": scope is not None,
+            "external_entries": self._external_entries(root, manifest)
+            if scope is not None
+            else [],
         }
 
+    def _external_entries(
+        self, root: Path, manifest: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        managed = {entry["path"] for entry in manifest["entries"]}
+        catalog_skills = self.catalog.list_skills()
+        by_name: dict[str, list[dict[str, Any]]] = {}
+        for skill in catalog_skills:
+            by_name.setdefault(skill["name"].casefold(), []).append(skill)
+        try:
+            children = sorted(root.iterdir(), key=lambda item: item.name.casefold())
+        except OSError:
+            return []
+        external: list[dict[str, Any]] = []
+        scope = self._system_scope(root)
+        for child in children:
+            if (
+                child.name.startswith(".")
+                or child.name in managed
+                or not (child / "SKILL.md").is_file()
+            ):
+                continue
+            try:
+                tree_hash, _ = hash_skill_tree(child)
+            except OSError:
+                tree_hash = None
+            provider = provider_skill_info(
+                root,
+                child,
+                scope["id"] if scope is not None else None,
+            )
+            candidates = [] if provider is not None else by_name.get(child.name.casefold(), [])
+            matches = sorted(
+                candidates,
+                key=lambda skill: (
+                    skill["tree_hash"] != tree_hash,
+                    not skill["valid"],
+                    skill["audit_severity"] in {"high", "critical"},
+                    -(skill.get("score") or 0.0),
+                    skill["source_name"].casefold(),
+                    skill["id"],
+                ),
+            )
+            external.append(
+                {
+                    "name": child.name,
+                    "path": child.name,
+                    "entry_type": "symlink" if child.is_symlink() else "directory",
+                    "tree_hash": tree_hash,
+                    "read_only": True,
+                    "management_state": (
+                        "provider-owned" if provider is not None else "external"
+                    ),
+                    "provider": provider["provider"] if provider else None,
+                    "protected_reason": provider["reason"] if provider else None,
+                    "migratable": provider is None and not child.is_symlink(),
+                    "migration_mode": (
+                        None
+                        if provider is not None
+                        else "associate-link"
+                        if child.is_symlink()
+                        else "backup-and-link"
+                    ),
+                    "matches": [
+                        {
+                            "id": skill["id"],
+                            "name": skill["name"],
+                            "source_name": skill["source_name"],
+                            "audit_severity": skill["audit_severity"],
+                            "valid": skill["valid"],
+                            "content_match": skill["tree_hash"] == tree_hash,
+                            "target_path": str(
+                                Path(skill["source_path"]) / skill["rel_path"]
+                            ),
+                        }
+                        for skill in matches
+                    ],
+                }
+            )
+        return external
+
+    @serialized_catalog_operation
+    def adopt(
+        self,
+        project: str | Path,
+        entry_name: str,
+        skill_id: str,
+        *,
+        allow_risk: bool = False,
+        replace_content: bool = False,
+        backup_token: str | None = None,
+    ) -> dict[str, Any]:
+        root = _safe_project(project)
+        if self._system_scope(root) is None:
+            raise ValidationError("External Skills can only be adopted in a system project")
+        if (
+            not entry_name
+            or entry_name.startswith(".")
+            or Path(entry_name).name != entry_name
+            or len(Path(entry_name).parts) != 1
+        ):
+            raise ValidationError("External Skill name must be one safe directory name")
+        destination = _safe_entry_path(root, entry_name)
+        if not _lexists(destination) or not (destination / "SKILL.md").is_file():
+            raise NotFoundError(f"External Skill does not exist: {entry_name}")
+
+        scope = self._system_scope(root)
+        provider = provider_skill_info(
+            root,
+            destination,
+            scope["id"] if scope is not None else None,
+        )
+        if provider is not None:
+            raise ValidationError(
+                f"Refusing to adopt provider-owned {provider['provider']} Skill: {entry_name}"
+            )
+
+        manifest = self.load_manifest(root)
+        if any(entry["path"] == entry_name for entry in manifest["entries"]):
+            raise ConflictError(f"Skill is already managed: {entry_name}")
+        skill = self.catalog.get_skill(skill_id)
+        if skill["name"] != entry_name:
+            raise ConflictError("Catalog Skill name does not match the external directory")
+        if not skill["valid"]:
+            raise ValidationError(f"Refusing invalid skill: {skill['name']}")
+        if not allow_risk and skill["audit_severity"] in {"high", "critical"}:
+            raise ValidationError(
+                f"Refusing {skill['audit_severity']}-risk skill without --allow-risk: {skill['name']}"
+            )
+        source = (Path(skill["source_path"]) / skill["rel_path"]).resolve()
+        if not source.is_dir() or not path_is_within(source, Path(skill["source_path"])):
+            raise ValidationError(f"Catalog source path is missing or unsafe: {skill['name']}")
+        source_hash, _ = hash_skill_tree(source)
+        external_hash, _ = hash_skill_tree(destination)
+        if source_hash != skill["tree_hash"]:
+            raise ConflictError("Catalog source changed; scan the source before associating")
+        if external_hash != source_hash and not replace_content:
+            raise ConflictError("External Skill content does not exactly match the catalog Skill")
+
+        original_entry_type = "symlink" if destination.is_symlink() else "directory"
+        same_link = destination.is_symlink() and destination.resolve() == source
+        backup_relative: str | None = None
+        backup: Path | None = None
+        if not same_link:
+            if backup_token is not None and not BACKUP_TOKEN.fullmatch(backup_token):
+                raise ValidationError("Backup token must contain only safe filename characters")
+            backup_relative = (
+                EXTERNAL_BACKUP_DIRECTORY
+                / f"{backup_token or uuid.uuid4().hex}-{entry_name}"
+            ).as_posix()
+            backup = _safe_entry_path(root, backup_relative)
+            if _lexists(backup):
+                raise ConflictError(f"External Skill backup already exists: {backup}")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(destination, backup)
+            try:
+                self._install(source, destination, "symlink")
+            except Exception:
+                os.replace(backup, destination)
+                raise
+
+        entry = {
+            "skill_id": skill["id"],
+            "name": skill["name"],
+            "path": entry_name,
+            "mode": "symlink",
+            "source_id": skill["source_id"],
+            "source_name": skill["source_name"],
+            "source_url": skill["source_url"],
+            "source_ref": skill["tracked_ref"],
+            "source_sha": skill["head_sha"],
+            "source_rel_path": skill["rel_path"],
+            "source_path": str(source),
+            "content_hash": skill["content_hash"],
+            "installed_tree_hash": source_hash,
+            "requirement": None,
+            "risk_accepted": bool(
+                allow_risk and skill["audit_severity"] in {"high", "critical"}
+            ),
+            "replaced_external_content": external_hash != source_hash,
+            "applied_at": utc_now(),
+            "adopted_backup": backup_relative,
+        }
+        manifest["entries"] = sorted(
+            [*manifest["entries"], entry], key=lambda item: item["path"]
+        )
+        manifest["updated_at"] = utc_now()
+        self._append_history(
+            manifest,
+            "adopt",
+            count=1,
+            skill_ids=[skill["id"]],
+            skill_names=[skill["name"]],
+            requirement=None,
+            target=".",
+            modes=["symlink"],
+            backup_path=backup_relative,
+            source_path=str(source),
+            original_entry_type=original_entry_type,
+        )
+        try:
+            _atomic_json(self.manifest_path(root), manifest)
+        except Exception:
+            if not same_link and destination.is_symlink() and backup is not None:
+                destination.unlink()
+                os.replace(backup, destination)
+            raise
+        return {
+            "project": str(root),
+            "adopted": entry,
+            "preserved_original": backup_relative is not None,
+            "backup_path": (
+                str(_safe_entry_path(root, backup_relative))
+                if backup_relative is not None
+                else None
+            ),
+        }
+
+    @serialized_catalog_operation
     def history(self, project: str | Path, *, limit: int = 50) -> dict[str, Any]:
         if limit < 1 or limit > HISTORY_LIMIT:
             raise ValidationError(
@@ -510,6 +1254,7 @@ class ProjectManager:
             "events": list(reversed(manifest.get("history", [])))[:limit],
         }
 
+    @serialized_catalog_operation
     def sync(
         self,
         project: str | Path,
@@ -574,6 +1319,7 @@ class ProjectManager:
         self._register_manifest(root, manifest)
         return {"project": str(root), "updated": updated}
 
+    @serialized_catalog_operation
     def unlink(
         self,
         project: str | Path,
@@ -604,8 +1350,17 @@ class ProjectManager:
                 raise ConflictError(
                     f"Refusing to remove changed managed entry without --force: {entry['path']}"
                 )
+            backup_relative = entry.get("adopted_backup")
+            if backup_relative and not _lexists(
+                _safe_entry_path(root, backup_relative)
+            ):
+                raise ConflictError(
+                    "Preserved external Skill backup is missing; refusing to uninstall: "
+                    f"{backup_relative}"
+                )
         retained: list[dict[str, Any]] = []
         removed: list[str] = []
+        restored: list[str] = []
         for entry in manifest["entries"]:
             if entry["skill_id"] not in selected:
                 retained.append(entry)
@@ -613,6 +1368,19 @@ class ProjectManager:
             destination = _safe_entry_path(root, entry["path"])
             if _lexists(destination):
                 self._remove_verified(destination, entry, force=force)
+            backup_relative = entry.get("adopted_backup")
+            if backup_relative:
+                backup = _safe_entry_path(root, backup_relative)
+                if not _lexists(backup):
+                    raise ConflictError(
+                        f"Preserved external Skill backup is missing; refusing to uninstall: {backup}"
+                    )
+                if _lexists(destination):
+                    raise ConflictError(
+                        f"Cannot restore preserved external Skill over existing content: {destination}"
+                    )
+                os.replace(backup, destination)
+                restored.append(entry["skill_id"])
             removed.append(entry["skill_id"])
         manifest["entries"] = retained
         manifest["updated_at"] = utc_now()
@@ -627,13 +1395,60 @@ class ProjectManager:
         )
         _atomic_json(self.manifest_path(root), manifest)
         self._register_manifest(root, manifest)
-        return {"project": str(root), "removed": removed}
+        return {"project": str(root), "removed": removed, "restored": restored}
 
-    @staticmethod
-    def _target_path(target: str) -> Path:
-        if target not in TARGETS:
-            raise ValidationError(f"Unknown project target: {target}")
-        return TARGETS[target]
+    @serialized_catalog_operation
+    def _finalize_restored_unlink(
+        self,
+        project: str | Path,
+        skill_id: str,
+        *,
+        expected_tree_hash: str,
+    ) -> dict[str, Any]:
+        """Finish only the manifest half of an interrupted backup restoration."""
+        root = _safe_project(project)
+        manifest = self.load_manifest(root)
+        entry = next(
+            (item for item in manifest["entries"] if item["skill_id"] == skill_id),
+            None,
+        )
+        if entry is None:
+            raise NotFoundError(f"Skill is not managed by this project: {skill_id}")
+        backup_relative = entry.get("adopted_backup")
+        if not backup_relative:
+            raise ConflictError("Managed Skill has no preserved external backup")
+        backup = _safe_entry_path(root, backup_relative)
+        destination = _safe_entry_path(root, entry["path"])
+        if _lexists(backup):
+            raise ConflictError("Preserved backup has not been restored yet")
+        if not _lexists(destination) or destination.is_symlink():
+            raise ConflictError("Restored external Skill must be a physical directory")
+        actual_hash, _ = hash_skill_tree(destination)
+        if actual_hash != expected_tree_hash:
+            raise ConflictError("Restored external Skill does not match the approved backup")
+
+        manifest["entries"] = [
+            item for item in manifest["entries"] if item["skill_id"] != skill_id
+        ]
+        manifest["updated_at"] = utc_now()
+        self._append_history(
+            manifest,
+            "unlink",
+            count=1,
+            skill_ids=[skill_id],
+            skill_names=[entry.get("name") or skill_id],
+            restored_manifest_only=True,
+        )
+        _atomic_json(self.manifest_path(root), manifest)
+        self._register_manifest(root, manifest)
+        return {"project": str(root), "removed": [skill_id], "restored": [skill_id]}
+
+    def _target_path(self, target: str, project: Path) -> Path:
+        if target == "root":
+            if self._system_scope(project) is None:
+                raise ValidationError("The root target is reserved for system Agent projects")
+            return Path(".")
+        return Path(get_agent_target(target).project_path)
 
     @staticmethod
     def _install(source: Path, destination: Path, mode: str) -> str:
@@ -669,6 +1484,7 @@ class ProjectManager:
             "path": entry["path"],
             "mode": entry.get("mode"),
             "state": "clean",
+            "restores_external": bool(entry.get("adopted_backup")),
         }
         if not _lexists(destination):
             result["state"] = "missing"
@@ -676,6 +1492,9 @@ class ProjectManager:
         try:
             catalog_skill = self.catalog.get_skill(entry["skill_id"], active_only=False)
         except NotFoundError:
+            result["state"] = "catalog-missing"
+            return result
+        if catalog_skill.get("source_status") == "removed":
             result["state"] = "catalog-missing"
             return result
         source = (

@@ -73,6 +73,12 @@ class DatabaseMigrationTests(unittest.TestCase):
                 evaluation_insight_table = migrated_database.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_evaluation_insights'"
                 ).fetchone()
+                profile_table = migrated_database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='skill_profiles'"
+                ).fetchone()
+                profile_entry_table = migrated_database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='skill_profile_entries'"
+                ).fetchone()
                 evaluation_columns = {
                     row[1]
                     for row in migrated_database.execute(
@@ -84,6 +90,8 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIsNotNone(project_table)
             self.assertIsNotNone(audit_review_table)
             self.assertIsNotNone(evaluation_insight_table)
+            self.assertIsNotNone(profile_table)
+            self.assertIsNotNone(profile_entry_table)
             self.assertIn("profile_id", evaluation_columns)
 
 

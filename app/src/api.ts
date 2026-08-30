@@ -4,6 +4,7 @@ import {
   bootstrapImportArgs,
   bootstrapInstallArgs,
   projectApplyArgs,
+  projectAdoptArgs,
   projectHistoryArgs,
   projectPlanArgs,
   snapshotArgs,
@@ -11,12 +12,26 @@ import {
   sourceReconcileArgs,
   sourceRefreshAllArgs,
   sourceUpdatePolicyArgs,
+  sourceRemovalPreviewArgs,
+  sourceRemoveArgs,
+  sourceRestoreArgs,
+  sourceForgetPreviewArgs,
+  sourceForgetArgs,
   llmClearErrorsArgs,
   llmConfigArgs,
   llmEvaluateArgs,
   llmProfileSaveArgs,
   llmReviewArgs,
   auditReviewArgs,
+  agentTargetArgs,
+  profileApplyArgs,
+  profileCaptureArgs,
+  profileDeleteArgs,
+  profileExportArgs,
+  profileImportArgs,
+  profileImportPreviewArgs,
+  profilePreviewArgs,
+  projectMatrixArgs,
 } from "./commands";
 import type {
   AppSnapshot,
@@ -27,6 +42,11 @@ import type {
   SourceRefreshAllResult,
   SourceReconcileResult,
   SourceUpdatePolicy,
+  SourceRemovalPreview,
+  SourceRemovalResult,
+  SourceRestoreResult,
+  SourceForgetPreview,
+  SourceForgetResult,
   LLMStatus,
   LLMProfileProvider,
   LLMAPIMode,
@@ -38,6 +58,14 @@ import type {
   BootstrapDiscovery,
   BootstrapImportResult,
   BootstrapInstallResult,
+  ActivationMatrix,
+  AgentTarget,
+  SkillProfile,
+  SkillProfileExportResult,
+  SkillProfileImportPreview,
+  SkillProfileImportResult,
+  SkillProfilePreview,
+  SkillProfileSummary,
 } from "./types";
 
 function commandError(error: unknown): Error {
@@ -133,6 +161,35 @@ export const api = {
       library,
       sourceUpdatePolicyArgs(sourceId, policy),
     ),
+  previewSourceRemoval: (library: string, sourceId: string) =>
+    runCommand<SourceRemovalPreview>(
+      library,
+      sourceRemovalPreviewArgs(sourceId),
+    ),
+  removeSource: (
+    library: string,
+    sourceId: string,
+    previewDigest: string,
+    cleanupReferences: boolean,
+  ) => runCommand<SourceRemovalResult>(
+    library,
+    sourceRemoveArgs(sourceId, previewDigest, cleanupReferences),
+  ),
+  restoreSource: (library: string, sourceId: string) =>
+    runCommand<SourceRestoreResult>(library, sourceRestoreArgs(sourceId)),
+  previewSourceForget: (library: string, sourceId: string) =>
+    runCommand<SourceForgetPreview>(
+      library,
+      sourceForgetPreviewArgs(sourceId),
+    ),
+  forgetSource: (
+    library: string,
+    sourceId: string,
+    previewDigest: string,
+  ) => runCommand<SourceForgetResult>(
+    library,
+    sourceForgetArgs(sourceId, previewDigest),
+  ),
   configureLLM: (
     library: string,
     provider: "disabled" | "codex" | "claude",
@@ -201,10 +258,19 @@ export const api = {
     requirement: string,
     target: string,
     allowRisk: boolean,
+    categoryL1 = "",
+    categoryL2 = "",
   ) =>
     runCommand<ProjectPlan>(
       library,
-      projectPlanArgs(project, requirement, target, allowRisk),
+      projectPlanArgs(
+        project,
+        requirement,
+        target,
+        allowRisk,
+        categoryL1,
+        categoryL2,
+      ),
     ),
   projectApply: (
     library: string,
@@ -256,4 +322,80 @@ export const api = {
       ...skillIds.flatMap((id) => ["--skill", id]),
       ...(force ? ["--force"] : []),
     ]),
+  projectAdopt: (
+    library: string,
+    project: string,
+    entry: string,
+    skillId: string,
+    allowRisk: boolean,
+    replaceContent = false,
+  ) => runCommand<Record<string, unknown>>(
+    library,
+    projectAdoptArgs(project, entry, skillId, allowRisk, replaceContent),
+  ),
+  agentTargets: (library: string) =>
+    runCommand<AgentTarget[]>(library, agentTargetArgs()),
+  projectMatrix: (library: string, query = "", limit = 20) =>
+    runCommand<ActivationMatrix>(
+      library,
+      projectMatrixArgs(query, limit),
+    ),
+  profileList: (library: string) =>
+    runCommand<SkillProfileSummary[]>(library, ["profile", "list"]),
+  profileCapture: (
+    library: string,
+    project: string,
+    name: string,
+    description = "",
+  ) => runCommand<SkillProfile>(
+    library,
+    profileCaptureArgs(project, name, description),
+  ),
+  profilePreview: (
+    library: string,
+    profileId: string,
+    project: string,
+    target: string,
+    allowRisk: boolean,
+  ) => runCommand<SkillProfilePreview>(
+    library,
+    profilePreviewArgs(profileId, project, target, allowRisk),
+  ),
+  profileApply: (
+    library: string,
+    profileId: string,
+    project: string,
+    target: string,
+    allowRisk: boolean,
+  ) => runCommand<SkillProfilePreview & { changed: boolean }>(
+    library,
+    profileApplyArgs(profileId, project, target, allowRisk),
+  ),
+  profileDelete: (library: string, profileId: string) =>
+    runCommand<{ deleted: boolean; id: string; name: string }>(
+      library,
+      profileDeleteArgs(profileId),
+    ),
+  profileExport: (
+    library: string,
+    profileId: string,
+    output: string,
+    overwrite = false,
+  ) => runCommand<SkillProfileExportResult>(
+    library,
+    profileExportArgs(profileId, output, overwrite),
+  ),
+  profileImportPreview: (library: string, input: string) =>
+    runCommand<SkillProfileImportPreview>(
+      library,
+      profileImportPreviewArgs(input),
+    ),
+  profileImport: (
+    library: string,
+    input: string,
+    expectedSha256: string,
+  ) => runCommand<SkillProfileImportResult>(
+    library,
+    profileImportArgs(input, expectedSha256),
+  ),
 };

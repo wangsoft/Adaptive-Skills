@@ -27,6 +27,40 @@ export function sourceUpdatePolicyArgs(
   return ["source", "policy", sourceId, policy];
 }
 
+export function sourceRemovalPreviewArgs(sourceId: string): string[] {
+  return ["source", "remove-preview", sourceId];
+}
+
+export function sourceRemoveArgs(
+  sourceId: string,
+  previewDigest: string,
+  cleanupReferences: boolean,
+): string[] {
+  return [
+    "source", "remove", sourceId,
+    "--expected-digest", previewDigest,
+    ...(!cleanupReferences ? ["--keep-references"] : []),
+  ];
+}
+
+export function sourceRestoreArgs(sourceId: string): string[] {
+  return ["source", "restore", sourceId];
+}
+
+export function sourceForgetPreviewArgs(sourceId: string): string[] {
+  return ["source", "forget-preview", sourceId];
+}
+
+export function sourceForgetArgs(
+  sourceId: string,
+  previewDigest: string,
+): string[] {
+  return [
+    "source", "forget", sourceId,
+    "--expected-digest", previewDigest,
+  ];
+}
+
 export function bootstrapDiscoverArgs(roots: string[]): string[] {
   return [
     "bootstrap", "discover",
@@ -138,13 +172,16 @@ export function projectPlanArgs(
   requirement: string,
   target: string,
   allowRisk: boolean,
+  categoryL1 = "",
+  categoryL2 = "",
 ): string[] {
   return [
     "project",
     "plan",
     project,
-    "--requirement",
-    requirement,
+    ...(requirement.trim() ? ["--requirement", requirement.trim()] : []),
+    ...(categoryL1.trim() ? ["--category-l1", categoryL1.trim()] : []),
+    ...(categoryL2.trim() ? ["--category-l2", categoryL2.trim()] : []),
     "--target",
     target,
     "--limit",
@@ -177,4 +214,97 @@ export function projectApplyArgs(
 
 export function projectHistoryArgs(project: string, limit = 50): string[] {
   return ["project", "history", project, "--limit", String(limit)];
+}
+
+export function projectAdoptArgs(
+  project: string,
+  entry: string,
+  skillId: string,
+  allowRisk: boolean,
+  replaceContent = false,
+): string[] {
+  return [
+    "project", "adopt", project,
+    "--entry", entry,
+    "--skill", skillId,
+    ...(allowRisk ? ["--allow-risk"] : []),
+    ...(replaceContent ? ["--replace-content"] : []),
+  ];
+}
+
+export function agentTargetArgs(): string[] {
+  return ["agent", "list"];
+}
+
+export function projectMatrixArgs(query = "", limit = 20): string[] {
+  return [
+    "project", "matrix",
+    "--limit", String(limit),
+    ...(query.trim() ? ["--query", query.trim()] : []),
+  ];
+}
+
+export function profileCaptureArgs(
+  project: string,
+  name: string,
+  description = "",
+): string[] {
+  return [
+    "profile", "capture", project,
+    "--name", name.trim(),
+    ...(description.trim() ? ["--description", description.trim()] : []),
+  ];
+}
+
+export function profilePreviewArgs(
+  profileId: string,
+  project: string,
+  target: string,
+  allowRisk: boolean,
+): string[] {
+  return [
+    "profile", "preview", profileId, project,
+    "--target", target,
+    ...(allowRisk ? ["--allow-risk"] : []),
+  ];
+}
+
+export function profileApplyArgs(
+  profileId: string,
+  project: string,
+  target: string,
+  allowRisk: boolean,
+): string[] {
+  return [
+    "profile", "apply", profileId, project,
+    "--target", target,
+    ...(allowRisk ? ["--allow-risk"] : []),
+  ];
+}
+
+export function profileDeleteArgs(profileId: string): string[] {
+  return ["profile", "delete", profileId];
+}
+
+export function profileExportArgs(
+  profileId: string,
+  output: string,
+  overwrite = false,
+): string[] {
+  return [
+    "profile", "export", profileId,
+    "--output", output,
+    ...(overwrite ? ["--overwrite"] : []),
+  ];
+}
+
+export function profileImportPreviewArgs(input: string): string[] {
+  return ["profile", "import-preview", input];
+}
+
+export function profileImportArgs(input: string, expectedSha256: string): string[] {
+  return [
+    "profile", "import", input,
+    "--expected-sha256", expectedSha256,
+  ];
 }

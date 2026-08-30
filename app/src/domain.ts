@@ -1,4 +1,10 @@
-import type { ProjectEntryStatus, RiskLevel, SkillSummary } from "./types";
+import type {
+  ActivationState,
+  ProjectEntryStatus,
+  RiskLevel,
+  SkillProfileAction,
+  SkillSummary,
+} from "./types";
 
 export const ELEVATED_RISKS = new Set<RiskLevel>(["high", "critical"]);
 
@@ -7,7 +13,22 @@ export function isElevatedRisk(risk: RiskLevel): boolean {
 }
 
 export function canSelectSkill(skill: SkillSummary, allowRisk: boolean): boolean {
-  return skill.valid && (allowRisk || !isElevatedRisk(skill.audit_severity));
+  return (
+    (skill.project_selection_state ?? "available") === "available" &&
+    skill.valid &&
+    (allowRisk || !isElevatedRisk(skill.audit_severity))
+  );
+}
+
+export function projectSelectionStateLabel(
+  state: NonNullable<SkillSummary["project_selection_state"]>,
+): string {
+  return {
+    available: "可添加",
+    installed: "已添加",
+    "managed-conflict": "已添加其他版本",
+    "path-conflict": "目标已占用",
+  }[state];
 }
 
 export function selectedRiskCount(
@@ -63,4 +84,24 @@ export function projectEntryRequiresForce(state: ProjectEntryStatus["state"]): b
 
 export function projectEntryCanSync(state: ProjectEntryStatus["state"]): boolean {
   return state !== "clean" && state !== "catalog-missing";
+}
+
+export function activationStateLabel(state: ActivationState): string {
+  return {
+    managed: "已安装",
+    drift: "有漂移",
+    "external-match": "可迁移",
+    external: "外部已有",
+    absent: "安装",
+    unavailable: "未发现目录",
+  }[state];
+}
+
+export function profileActionLabel(action: SkillProfileAction): string {
+  return {
+    install: "将安装",
+    "already-installed": "已安装",
+    conflict: "有冲突",
+    unresolved: "未解析",
+  }[action];
 }

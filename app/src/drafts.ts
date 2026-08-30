@@ -1,10 +1,14 @@
-export type ProjectTarget = "auto" | "codex" | "claude";
+export type ProjectTarget = "auto" | "codex" | "claude" | "root";
+export type ProjectDiscoveryMode = "requirement" | "category";
 export type DraftLLMProvider = "codex" | "claude" | "openai-compatible";
 export type DraftLLMAPIMode = "auto" | "responses" | "chat-completions";
 
 export interface ProjectDraft {
   project: string;
   requirement: string;
+  discoveryMode: ProjectDiscoveryMode;
+  categoryL1: string;
+  categoryL2: string;
   target: ProjectTarget;
   allowRisk: boolean;
 }
@@ -48,6 +52,9 @@ export interface SourceRefreshHistoryRecord {
 export const EMPTY_PROJECT_DRAFT: ProjectDraft = {
   project: "",
   requirement: "",
+  discoveryMode: "requirement",
+  categoryL1: "",
+  categoryL2: "",
   target: "auto",
   allowRisk: false,
 };
@@ -106,12 +113,16 @@ export function loadProjectDraft(
   const value = read(storage, key("project", library));
   if (!value || typeof value !== "object") return { ...EMPTY_PROJECT_DRAFT };
   const draft = value as Partial<ProjectDraft>;
-  const target = ["auto", "codex", "claude"].includes(String(draft.target))
+  const target = ["auto", "codex", "claude", "root"].includes(String(draft.target))
     ? draft.target as ProjectTarget
     : "auto";
+  const discoveryMode = draft.discoveryMode === "category" ? "category" : "requirement";
   return {
     project: typeof draft.project === "string" ? draft.project : "",
     requirement: typeof draft.requirement === "string" ? draft.requirement : "",
+    discoveryMode,
+    categoryL1: typeof draft.categoryL1 === "string" ? draft.categoryL1 : "",
+    categoryL2: typeof draft.categoryL2 === "string" ? draft.categoryL2 : "",
     target,
     allowRisk: typeof draft.allowRisk === "boolean" ? draft.allowRisk : false,
   };

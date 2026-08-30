@@ -53,6 +53,125 @@ export interface SourceSummary {
   invalid_count: number;
   elevated_risk_count: number;
   pending_evaluation_count: number;
+  repository_exists?: boolean;
+  reclone_supported?: boolean;
+  restorable?: boolean;
+}
+
+export interface SourceRemovalEntry {
+  skill_id: string;
+  name: string | null;
+  path: string;
+  mode: "symlink" | "copy";
+  state: ProjectEntryStatus["state"];
+  restores_external: boolean;
+}
+
+export interface SourceRemovalProject {
+  project_id: string;
+  project_path: string;
+  display_name: string;
+  project_kind: "project" | "system";
+  entries: SourceRemovalEntry[];
+}
+
+export interface SourceRemovalWarning {
+  id: string;
+  display_name: string;
+  path: string;
+  status: string;
+  problem: string | null;
+}
+
+export interface SourceRemovalPreview {
+  source: Pick<SourceSummary, "id" | "name" | "url" | "local_path" | "status" | "head_sha" | "updated_at">;
+  skills: Array<{ id: string; name: string; rel_path: string }>;
+  references: SourceRemovalProject[];
+  inaccessible_projects: SourceRemovalWarning[];
+  skill_count: number;
+  affected_project_count: number;
+  reference_count: number;
+  symlink_count: number;
+  copy_count: number;
+  restore_count: number;
+  blocker_count: number;
+  repository_retained: true;
+  repository_path: string;
+  preview_digest: string;
+}
+
+export interface SourceRemovalResult {
+  removed: true;
+  source_id: string;
+  source_name: string;
+  repository_retained: true;
+  repository_path: string;
+  cleanup_references: boolean;
+  cleaned_project_count: number;
+  cleaned_reference_count: number;
+  restored_external_count: number;
+  kept_reference_count: number;
+  cleaned_projects: Array<{
+    project_id: string;
+    project_path: string;
+    display_name: string;
+    removed_count: number;
+    restored_count: number;
+  }>;
+  inaccessible_projects: SourceRemovalWarning[];
+}
+
+export interface SourceRestoreResult {
+  restored: true;
+  source: SourceSummary;
+  scan: {
+    discovered: number;
+    valid: number;
+    invalid: number;
+    critical: number;
+  };
+}
+
+export interface SourceForgetPreview {
+  source: Pick<SourceSummary, "id" | "name" | "url" | "local_path" | "status" | "head_sha" | "updated_at">;
+  skills: Array<{
+    id: string;
+    name: string;
+    rel_path: string;
+    content_hash: string;
+    tree_hash: string;
+    updated_at: string;
+  }>;
+  references: SourceRemovalProject[];
+  inaccessible_projects: SourceRemovalWarning[];
+  profile_locators: Array<{ profile_id: string; position: number; skill_id: string }>;
+  history: {
+    annotation_count: number;
+    audit_review_count: number;
+    evaluation_count: number;
+    scan_run_count: number;
+  };
+  skill_count: number;
+  affected_project_count: number;
+  reference_count: number;
+  profile_locator_count: number;
+  blocker_count: number;
+  repository_retained: true;
+  repository_exists: boolean;
+  repository_path: string;
+  preview_digest: string;
+}
+
+export interface SourceForgetResult {
+  forgotten: true;
+  source_id: string;
+  source_name: string;
+  deleted_skill_count: number;
+  cleared_profile_locator_count: number;
+  deleted_history: SourceForgetPreview["history"];
+  repository_retained: true;
+  repository_exists: boolean;
+  repository_path: string;
 }
 
 export type LLMProfileProvider = "codex" | "claude" | "openai-compatible";
@@ -249,6 +368,11 @@ export interface SkillSummary {
   compatibility?: string | null;
   updated_at?: string;
   reason?: SearchReason[];
+  variant_count?: number;
+  project_selection_state?: "available" | "installed" | "managed-conflict" | "path-conflict";
+  project_entry_state?: ProjectEntryStatus["state"] | null;
+  project_entry_skill_id?: string | null;
+  project_entry_path?: string | null;
 }
 
 export interface SkillDetail extends SkillSummary {
@@ -273,7 +397,7 @@ export interface CategoryFilter {
   count: number;
 }
 
-export type BootstrapCandidateKind = "local" | "git" | "symlink" | "system" | "managed";
+export type BootstrapCandidateKind = "local" | "git" | "symlink" | "system" | "provider" | "managed";
 
 export interface BootstrapDefaultRoot {
   id: string;
@@ -301,6 +425,8 @@ export interface BootstrapCandidate {
   file_count: number;
   git_root: string | null;
   git_url: string | null;
+  provider: string | null;
+  protected_reason: string | null;
   duplicate_of: string | null;
   importable: boolean;
   reason: string;
@@ -374,6 +500,7 @@ export interface AppSnapshot {
   library: { path: string; database: string; initialized: boolean };
   summary: AppSummary;
   sources: SourceSummary[];
+  removed_sources: SourceSummary[];
   skills: SkillSummary[];
   filters: { categories: CategoryFilter[]; risks: RiskLevel[] };
   llm: LLMStatus;
@@ -385,7 +512,11 @@ export interface AppSnapshot {
 export interface ProjectPlan {
   project: string;
   requirement: string;
+  discovery_mode: "requirement" | "category";
+  category_l1: string | null;
+  category_l2: string | null;
   target: string;
+  library_root: string;
   recommendations: SkillSummary[];
 }
 
@@ -395,6 +526,31 @@ export interface ProjectEntryStatus {
   path: string;
   mode: "symlink" | "copy";
   state: "clean" | "missing" | "catalog-missing" | "replaced" | "broken" | "source-drift" | "project-drift";
+  restores_external: boolean;
+}
+
+export interface ProjectExternalMatch {
+  id: string;
+  name: string;
+  source_name: string;
+  audit_severity: RiskLevel;
+  valid: boolean;
+  content_match: boolean;
+  target_path: string;
+}
+
+export interface ProjectExternalEntry {
+  name: string;
+  path: string;
+  entry_type: "directory" | "symlink";
+  tree_hash: string | null;
+  read_only: true;
+  management_state: "external" | "provider-owned";
+  provider: string | null;
+  protected_reason: string | null;
+  migratable: boolean;
+  migration_mode: "backup-and-link" | "associate-link" | null;
+  matches: ProjectExternalMatch[];
 }
 
 export interface ProjectStatus {
@@ -403,11 +559,15 @@ export interface ProjectStatus {
   managed: boolean;
   entries: ProjectEntryStatus[];
   clean: boolean;
+  project_kind: "project" | "system";
+  system_scope: "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | null;
+  protected: boolean;
+  external_entries: ProjectExternalEntry[];
 }
 
 export interface ProjectHistoryEvent {
   id: string;
-  action: "apply" | "sync" | "unlink";
+  action: "apply" | "adopt" | "sync" | "unlink";
   created_at: string;
   count: number;
   skill_ids: string[];
@@ -416,6 +576,9 @@ export interface ProjectHistoryEvent {
   target?: string;
   modes?: string[];
   force?: boolean;
+  backup_path?: string | null;
+  source_path?: string;
+  original_entry_type?: "directory" | "symlink";
 }
 
 export interface ProjectHistory {
@@ -432,9 +595,165 @@ export interface ProjectSummary {
   history_count: number;
   clean: boolean;
   last_activity_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  problem: string | null;
+  project_kind: "project" | "system";
+  system_scope: "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | null;
+  protected: boolean;
+  external_count: number;
+}
+
+export type AgentTargetId = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
+
+export interface AgentTarget {
+  id: AgentTargetId;
+  label: string;
+  path: string;
+  global_path: string;
+  project_path: string;
+  exists: boolean;
+  aliases: string[];
+  preferred_rel_prefixes: string[];
+}
+
+export interface ActivationTarget extends AgentTarget {
+  status: "available" | "unavailable" | "invalid";
+  problem: string | null;
+}
+
+export type ActivationState =
+  | "managed"
+  | "drift"
+  | "external-match"
+  | "external"
+  | "absent"
+  | "unavailable";
+
+export interface ActivationCell {
+  target_id: AgentTargetId;
+  skill_id: string;
+  installed_skill_id: string | null;
+  adopt_skill_id: string | null;
+  content_match: boolean | null;
+  source_name: string;
+  audit_severity: RiskLevel;
+  valid: boolean;
+  path: string;
+  detail_state: ProjectEntryStatus["state"] | "directory-missing" | string | null;
+  read_only: boolean;
+  state: ActivationState;
+}
+
+export interface ActivationRow {
+  name: string;
+  description: string;
+  variant_count: number;
+  cells: ActivationCell[];
+}
+
+export interface ActivationMatrix {
+  library_root: string;
+  query: string;
+  limit: number;
+  total: number;
+  targets: ActivationTarget[];
+  rows: ActivationRow[];
+}
+
+export interface SkillProfileSummary {
+  id: string;
+  name: string;
+  description: string;
+  entry_count: number;
   created_at: string;
   updated_at: string;
-  problem: string | null;
+}
+
+export interface SkillProfileEntry {
+  skill_id: string | null;
+  skill_name: string;
+  source_name: string | null;
+  source_url: string | null;
+  rel_path: string | null;
+}
+
+export interface SkillProfile extends Omit<SkillProfileSummary, "entry_count"> {
+  entries: SkillProfileEntry[];
+}
+
+export type SkillProfileAction =
+  | "install"
+  | "already-installed"
+  | "conflict"
+  | "unresolved";
+
+export interface SkillProfilePreviewItem extends SkillProfileEntry {
+  skill_id: string | null;
+  resolved_name: string;
+  source_name: string | null;
+  action: SkillProfileAction;
+  reason: string;
+  path: string | null;
+  audit_severity?: RiskLevel;
+  valid?: boolean;
+}
+
+export interface SkillProfilePreview {
+  profile: SkillProfile;
+  project: string;
+  target: string;
+  items: SkillProfilePreviewItem[];
+  counts: Record<SkillProfileAction, number>;
+  can_apply: boolean;
+}
+
+export type SkillProfileImportStatus =
+  | "exact"
+  | "compatible"
+  | "ambiguous"
+  | "missing";
+
+export interface SkillProfileImportItem
+  extends Omit<SkillProfileEntry, "skill_id"> {
+  status: SkillProfileImportStatus;
+  reason: string;
+}
+
+export interface SkillProfileImportPreview {
+  schema: "adaptive-skills-profile/1";
+  path: string;
+  sha256: string;
+  profile: {
+    name: string;
+    description: string;
+    entry_count: number;
+  };
+  items: SkillProfileImportItem[];
+  counts: Record<SkillProfileImportStatus, number>;
+  action: "create" | "already-exists";
+  can_import: boolean;
+  existing_profile_id: string | null;
+}
+
+export interface SkillProfileExportResult {
+  schema: "adaptive-skills-profile/1";
+  path: string;
+  written: boolean;
+  overwritten: boolean;
+  bytes: number;
+  profile: {
+    id: string;
+    name: string;
+    entry_count: number;
+  };
+}
+
+export interface SkillProfileImportResult {
+  changed: boolean;
+  action: "created" | "already-exists";
+  sha256: string;
+  profile: SkillProfile;
 }
 
 export interface CommandFailure {

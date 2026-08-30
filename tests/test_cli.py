@@ -197,5 +197,70 @@ class CliTests(unittest.TestCase):
             history = run_cli(library, "project", "history", str(project))
             self.assertEqual(history["events"][0]["action"], "apply")
             projects = run_cli(library, "project", "list")
-            self.assertEqual(projects[0]["path"], str(project.resolve()))
-            self.assertEqual(projects[0]["history_count"], 1)
+            ordinary = next(
+                item for item in projects if item["project_kind"] == "project"
+            )
+            self.assertEqual(ordinary["path"], str(project.resolve()))
+            self.assertEqual(ordinary["history_count"], 1)
+
+            profile = run_cli(
+                library,
+                "profile",
+                "capture",
+                str(project),
+                "--name",
+                "Documentation baseline",
+            )
+            self.assertEqual(profile["entries"][0]["skill_name"], "docs-skill")
+            profile_file = root / "documentation-profile.json"
+            exported = run_cli(
+                library,
+                "profile",
+                "export",
+                profile["id"],
+                "--output",
+                str(profile_file),
+            )
+            self.assertTrue(exported["written"])
+            import_preview = run_cli(
+                library,
+                "profile",
+                "import-preview",
+                str(profile_file),
+            )
+            self.assertEqual(import_preview["action"], "already-exists")
+            destination = root / "profile-project"
+            destination.mkdir()
+            preview = run_cli(
+                library,
+                "profile",
+                "preview",
+                profile["id"],
+                str(destination),
+            )
+            self.assertTrue(preview["can_apply"])
+            self.assertEqual(preview["counts"]["install"], 1)
+            run_cli(
+                library,
+                "profile",
+                "apply",
+                profile["id"],
+                str(destination),
+            )
+            self.assertTrue(
+                destination.joinpath(".agents", "skills", "docs-skill").is_symlink()
+            )
+            deleted = run_cli(library, "profile", "delete", profile["id"])
+            self.assertTrue(deleted["deleted"])
+            imported = run_cli(
+                library,
+                "profile",
+                "import",
+                str(profile_file),
+                "--expected-sha256",
+                import_preview["sha256"],
+            )
+            self.assertTrue(imported["changed"])
+            self.assertTrue(
+                destination.joinpath(".agents", "skills", "docs-skill").is_symlink()
+            )

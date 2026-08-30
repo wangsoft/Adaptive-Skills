@@ -71,8 +71,6 @@ def main() -> int:
             str(root / "src"),
             "--collect-submodules",
             "keyring.backends",
-            "--collect-submodules",
-            "openpyxl",
             "--distpath",
             str(distribution),
             "--workpath",

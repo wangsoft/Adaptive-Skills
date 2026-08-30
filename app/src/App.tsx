@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -29,6 +29,11 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import appIconUrl from "./assets/app-icon.svg";
+import {
+  ProjectActivationMatrix,
+  ProjectProfilesPanel,
+} from "./ProjectControls";
 import {
   canSelectSkill,
   formatDate,
@@ -36,6 +41,7 @@ import {
   projectEntryCanSync,
   projectEntryRequiresForce,
   projectEntryStateLabel,
+  projectSelectionStateLabel,
   riskLabel,
   selectedRiskCount,
   shortSha,
@@ -63,6 +69,8 @@ import type { ProjectDraft } from "./drafts";
 import type {
   AppSnapshot,
   ProjectEntryStatus,
+  ProjectExternalEntry,
+  ProjectExternalMatch,
   ProjectPlan,
   ProjectHistoryEvent,
   ProjectStatus,
@@ -73,6 +81,11 @@ import type {
   SourceReconcileResult,
   SourceSummary,
   SourceUpdatePolicy,
+  SourceRemovalPreview,
+  SourceRemovalResult,
+  SourceRestoreResult,
+  SourceForgetPreview,
+  SourceForgetResult,
   LLMProfile,
   LLMProfileProvider,
   LLMAPIMode,
@@ -88,6 +101,15 @@ import type {
   BootstrapImportResult,
   BootstrapInstallResult,
   BootstrapStatus,
+  CategoryFilter,
+  ActivationCell,
+  ActivationMatrix,
+  ActivationRow,
+  ActivationTarget,
+  AgentTarget,
+  SkillProfilePreview,
+  SkillProfileImportPreview,
+  SkillProfileSummary,
 } from "./types";
 
 type View = "overview" | "bootstrap" | "skills" | "sources" | "projects" | "evaluation";
@@ -129,6 +151,42 @@ function useEscapeKey(active: boolean, onEscape: () => void) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [active, onEscape]);
+}
+
+function useFocusTrap(
+  active: boolean,
+  container: { readonly current: HTMLElement | null },
+) {
+  useEffect(() => {
+    if (!active || !container.current) return;
+    const previous = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !container.current) return;
+      const controls = Array.from(
+        container.current.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    container.current.querySelector<HTMLElement>("[data-initial-focus]")?.focus();
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previous?.focus();
+    };
+  }, [active, container]);
 }
 
 function App() {
@@ -274,6 +332,89 @@ function App() {
     }
   };
 
+  const previewSourceRemoval = async (sourceId: string): Promise<SourceRemovalPreview | null> => {
+    setBusy(`source-remove-preview-${sourceId}`);
+    setError(null);
+    try {
+      return await api.previewSourceRemoval(library, sourceId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const removeSource = async (
+    preview: SourceRemovalPreview,
+    cleanupReferences: boolean,
+  ): Promise<SourceRemovalResult | null> => {
+    setBusy(`source-remove-${preview.source.id}`);
+    setError(null);
+    try {
+      const result = await api.removeSource(
+        library,
+        preview.source.id,
+        preview.preview_digest,
+        cleanupReferences,
+      );
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const restoreSource = async (sourceId: string): Promise<SourceRestoreResult | null> => {
+    setBusy(`source-restore-${sourceId}`);
+    setError(null);
+    try {
+      const result = await api.restoreSource(library, sourceId);
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const previewSourceForget = async (sourceId: string): Promise<SourceForgetPreview | null> => {
+    setBusy(`source-forget-preview-${sourceId}`);
+    setError(null);
+    try {
+      return await api.previewSourceForget(library, sourceId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const forgetSource = async (preview: SourceForgetPreview): Promise<SourceForgetResult | null> => {
+    setBusy(`source-forget-${preview.source.id}`);
+    setError(null);
+    try {
+      const result = await api.forgetSource(
+        library,
+        preview.source.id,
+        preview.preview_digest,
+      );
+      await loadSnapshot();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const runEvaluation = async (sourceId: string): Promise<LLMEvaluationRun | null> => {
     setBusy(`evaluate-${sourceId}`);
     setError(null);
@@ -321,7 +462,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><Sparkles size={18} /></div>
+          <img className="brand-mark" src={appIconUrl} alt="" aria-hidden="true" />
           <div><strong>Adaptive Skills</strong><span>Local skill intelligence</span></div>
         </div>
 
@@ -411,6 +552,7 @@ function App() {
                 key={library}
                 library={library}
                 sources={snapshot.sources}
+                removedSources={snapshot.removed_sources}
                 busy={busy}
                 onAdd={addAndScanSource}
                 onScan={(id) => runAction(`scan-${id}`, () => api.scan(library, id))}
@@ -419,6 +561,11 @@ function App() {
                 onSetPolicy={(id, policy) =>
                   runAction(`policy-${id}`, () => api.setSourcePolicy(library, id, policy))
                 }
+                onPreviewRemove={previewSourceRemoval}
+                onRemove={removeSource}
+                onRestore={restoreSource}
+                onPreviewForget={previewSourceForget}
+                onForget={forgetSource}
                 onUpdate={(id) =>
                   runAction(`update-${id}`, async () => {
                     await api.updateSource(library, id);
@@ -460,7 +607,7 @@ function App() {
                 }
               />
             )}
-            {view === "projects" && <ProjectsView key={library} library={library} onError={setError} />}
+            {view === "projects" && <ProjectsView key={library} library={library} categories={snapshot.filters.categories} onError={setError} />}
           </div>
         ) : (
           <EmptyConnection library={library} onChoose={chooseLibrary} onRetry={() => loadSnapshot()} />
@@ -502,6 +649,7 @@ const BOOTSTRAP_KIND_LABEL: Record<BootstrapCandidate["kind"], string> = {
   git: "Git 工作区",
   symlink: "软链接",
   system: "系统内置",
+  provider: "宿主自带",
   managed: "已管理",
 };
 
@@ -729,7 +877,7 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
   const safePercent = summary.skill_count ? Math.round((summary.valid_count / summary.skill_count) * 100) : 0;
   const elevated = summary.risk_counts.high + summary.risk_counts.critical;
   const cards = [
-    { label: "收录 Skills", value: summary.skill_count, note: `${summary.annotated_count} 条人工标注`, icon: Layers3, tone: "mint" },
+    { label: "收录 Skills", value: summary.skill_count, note: `${summary.annotated_count} 条智能整理`, icon: Layers3, tone: "mint" },
     { label: "Git 来源", value: summary.source_count, note: `最后扫描 ${formatDate(summary.last_scanned_at)}`, icon: FolderGit2, tone: "blue" },
     { label: "有效率", value: `${safePercent}%`, note: `${summary.invalid_count} 个需要修复`, icon: ShieldCheck, tone: "green" },
     { label: "高风险信号", value: elevated, note: `${summary.risk_counts.critical} 个严重风险`, icon: ShieldAlert, tone: "amber" },
@@ -740,7 +888,7 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
         <div>
           <div className="eyebrow"><Sparkles size={14} /> 本地优先 · 按项目加载</div>
           <h2>让每个项目只看到真正需要的 Skills。</h2>
-          <p>目录、风险和人工分类保留在本地。先解释推荐，再由你确认创建项目软链接。</p>
+          <p>分类、评分和风险审查都保存在本地 SQLite。先解释推荐，再由你确认创建项目软链接。</p>
           <button className="button primary" onClick={() => onNavigate("projects")}>初始化项目 Skills <ArrowRight size={16} /></button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
@@ -877,9 +1025,10 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   return <label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
 }
 
-function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, onSetPolicy, llmEnabled, onEvaluate }: {
+function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, onSetPolicy, onPreviewRemove, onRemove, onRestore, onPreviewForget, onForget, llmEnabled, onEvaluate }: {
   library: string;
   sources: SourceSummary[];
+  removedSources: SourceSummary[];
   busy: string | null;
   onAdd: (url: string, name?: string) => Promise<boolean>;
   onScan: (id: string) => Promise<boolean>;
@@ -887,6 +1036,11 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
   onUpdate: (id: string) => Promise<boolean>;
   onRefreshAll: () => Promise<SourceRefreshAllResult | null>;
   onSetPolicy: (id: string, policy: SourceUpdatePolicy) => Promise<boolean>;
+  onPreviewRemove: (id: string) => Promise<SourceRemovalPreview | null>;
+  onRemove: (preview: SourceRemovalPreview, cleanupReferences: boolean) => Promise<SourceRemovalResult | null>;
+  onRestore: (id: string) => Promise<SourceRestoreResult | null>;
+  onPreviewForget: (id: string) => Promise<SourceForgetPreview | null>;
+  onForget: (preview: SourceForgetPreview) => Promise<SourceForgetResult | null>;
   llmEnabled: boolean;
   onEvaluate: (id: string) => Promise<LLMEvaluationRun | null>;
 }) {
@@ -897,6 +1051,15 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
   const [refreshResult, setRefreshResult] = useState<SourceRefreshAllResult | null>(null);
   const [reconcileResult, setReconcileResult] = useState<SourceReconcileResult | null>(null);
   const [evaluationResult, setEvaluationResult] = useState<LLMEvaluationRun | null>(null);
+  const [removalPreview, setRemovalPreview] = useState<SourceRemovalPreview | null>(null);
+  const [cleanupReferences, setCleanupReferences] = useState(true);
+  const [removalResult, setRemovalResult] = useState<SourceRemovalResult | null>(null);
+  const [restoredName, setRestoredName] = useState<string | null>(null);
+  const [forgetPreview, setForgetPreview] = useState<SourceForgetPreview | null>(null);
+  const [forgetConfirmation, setForgetConfirmation] = useState("");
+  const [forgetResult, setForgetResult] = useState<SourceForgetResult | null>(null);
+  const removalDialogRef = useRef<HTMLDivElement>(null);
+  const forgetDialogRef = useRef<HTMLDivElement>(null);
   const [refreshHistory, setRefreshHistory] = useState(() => loadSourceRefreshHistory(localStorage, library));
   useEffect(() => {
     saveSourceDraft(localStorage, library, { adding, url, name });
@@ -940,6 +1103,58 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
       });
     }
   };
+  const closeRemoval = () => {
+    if (busy?.startsWith("source-remove-")) return;
+    setRemovalPreview(null);
+  };
+  useEscapeKey(Boolean(removalPreview), closeRemoval);
+  useFocusTrap(Boolean(removalPreview), removalDialogRef);
+  const closeForget = () => {
+    if (busy?.startsWith("source-forget-")) return;
+    setForgetPreview(null);
+    setForgetConfirmation("");
+  };
+  useEscapeKey(Boolean(forgetPreview), closeForget);
+  useFocusTrap(Boolean(forgetPreview), forgetDialogRef);
+  const previewRemoval = async (source: SourceSummary) => {
+    setRemovalResult(null);
+    setRestoredName(null);
+    const preview = await onPreviewRemove(source.id);
+    if (!preview) return;
+    setCleanupReferences(true);
+    setRemovalPreview(preview);
+  };
+  const confirmRemoval = async () => {
+    if (!removalPreview) return;
+    const result = await onRemove(removalPreview, cleanupReferences);
+    if (!result) return;
+    setRemovalResult(result);
+    setRemovalPreview(null);
+  };
+  const restoreRemovedSource = async (source: SourceSummary) => {
+    setRemovalResult(null);
+    const result = await onRestore(source.id);
+    if (result) setRestoredName(source.name);
+  };
+  const previewForget = async (source: SourceSummary) => {
+    setForgetResult(null);
+    setRestoredName(null);
+    const preview = await onPreviewForget(source.id);
+    if (!preview) return;
+    setForgetConfirmation("");
+    setForgetPreview(preview);
+  };
+  const confirmForget = async () => {
+    if (!forgetPreview || forgetConfirmation !== forgetPreview.source.name) return;
+    const result = await onForget(forgetPreview);
+    if (!result) return;
+    setForgetResult(result);
+    setForgetPreview(null);
+    setForgetConfirmation("");
+  };
+  const blockedCleanup = Boolean(cleanupReferences && removalPreview?.blocker_count);
+  const blockedForget = Boolean(forgetPreview?.blocker_count);
+  const restorableRemovedCount = removedSources.filter((source) => source.restorable).length;
   return (
     <div className="stack gap-lg">
       <div className="section-toolbar">
@@ -985,6 +1200,19 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
         </div>
       )}
       {evaluationResult && <EvaluationRunSummary run={evaluationResult} />}
+      {removalResult && (
+        <div className="refresh-summary" role="status">
+          <div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已从目录移除</strong><p>{removalResult.cleanup_references ? `已清理 ${removalResult.cleaned_reference_count} 个受管引用` : `保留 ${removalResult.kept_reference_count} 个项目引用`} · Git 仓库仍保留在原位置</p></div></div>
+          <div className="source-retained-path" title={removalResult.repository_path}><FolderGit2 size={14} /><span>{removalResult.repository_path}</span></div>
+        </div>
+      )}
+      {restoredName && <div className="refresh-summary" role="status"><div className="refresh-summary-heading"><Check size={18} /><div><strong>来源已恢复</strong><p>{restoredName} 已重新扫描并返回目录。</p></div></div></div>}
+      {forgetResult && (
+        <div className="refresh-summary" role="status">
+          <div className="refresh-summary-heading"><Check size={18} /><div><strong>目录历史记录已彻底移除</strong><p>{forgetResult.source_name} 的 {forgetResult.deleted_skill_count} 个历史 Skill 已从 SQLite 删除；现在可以重新登记同名或同路径仓库。</p></div></div>
+          <div className="source-retained-path" title={forgetResult.repository_path}><FolderGit2 size={14} /><span>{forgetResult.repository_exists ? `仓库文件仍保留：${forgetResult.repository_path}` : `原仓库目录已不存在：${forgetResult.repository_path}`}</span></div>
+        </div>
+      )}
       {refreshHistory.length > 0 && (
         <section className="panel source-refresh-history">
           <div className="panel-heading"><div><span className="eyebrow">Local activity</span><h3>最近全部更新记录</h3></div><span className="badge neutral">保留 {refreshHistory.length} 次</span></div>
@@ -1003,19 +1231,82 @@ function SourcesView({ library, sources, busy, onAdd, onScan, onReconcile, onUpd
       <section className="source-grid">
         {sources.map((source) => (
           <article className="source-card" key={source.id}>
-            <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地归集目录"}</p></div><div className="source-badges"><span className="badge neutral">{source.url ? (source.update_policy === "local" ? "本地维护" : "远程跟随") : "本地归集"}</span><span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? "需检查" : "健康"}</span></div></div>
+            <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地归集目录"}</p></div><div className="source-badges"><span className="badge neutral">{source.url ? (source.update_policy === "local" ? "本地维护" : "远程跟随") : "本地归集"}</span><span className={source.repository_exists === false || source.invalid_count ? "badge warning" : "badge success"}>{source.repository_exists === false ? "目录缺失" : source.invalid_count ? "需检查" : "健康"}</span></div></div>
             <div className="source-stat-row"><div><span>Skills</span><strong>{source.skill_count}</strong></div><div><span>有效</span><strong>{source.valid_count}</strong></div><div><span>待评测</span><strong>{source.pending_evaluation_count}</strong></div></div>
             <div className="source-path" title={source.local_path}><FolderGit2 size={14} />{source.local_path}</div>
             <div className="source-footer"><span>{source.url ? <><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</> : <><Layers3 size={14} />本地副本 · 不拉取</>}</span><span>{formatDate(source.last_scanned_at)}</span></div>
             <div className="source-actions">
-              {source.url && <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>}
-              <button className="button secondary compact" disabled={Boolean(busy)} onClick={() => void onScan(source.id)}>{busy === `scan-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新扫描</button>
-              {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? `评测 ${source.pending_evaluation_count}` : "配置 LLM"}</button>}
-              {source.url && source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
+              {source.repository_exists === false && source.reclone_supported && source.url ? <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onAdd(source.url!, source.name)}>{busy === "source-add" ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}重新 Clone 并扫描</button> : <>
+                {source.url && <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>}
+                <button className="button secondary compact" disabled={Boolean(busy)} onClick={() => void onScan(source.id)}>{busy === `scan-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}重新扫描</button>
+                {source.pending_evaluation_count > 0 && <button className="button secondary compact" disabled={Boolean(busy) || !llmEnabled} onClick={() => evaluateSource(source)} title={llmEnabled ? "生成分类和质量评分提案" : "先在 LLM 评测页面配置模型"}>{busy === `evaluate-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}{llmEnabled ? `评测 ${source.pending_evaluation_count}` : "配置 LLM"}</button>}
+                {source.url && source.update_policy === "remote" && <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onUpdate(source.id)}>{busy === `update-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}更新并扫描</button>}
+              </>}
+              <button className="button ghost compact danger" disabled={Boolean(busy)} onClick={() => void previewRemoval(source)}>{busy === `source-remove-preview-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}移除来源</button>
             </div>
           </article>
         ))}
       </section>
+      {sources.length === 0 && <div className="empty-inline"><FolderGit2 size={24} /><strong>没有正在管理的来源</strong><span>可以添加 Git 来源，或从下方恢复已移除来源。</span></div>}
+      {removedSources.length > 0 && (
+        <section className="panel removed-sources-panel">
+          <div className="panel-heading"><div><h3>已移除来源</h3><p>这里保存的是 SQLite 历史记录。目录仍存在时可恢复；也可确认彻底移除记录，释放同名和同路径。</p></div><span className="badge neutral">{removedSources.length} 个历史记录 · {restorableRemovedCount} 个可恢复</span></div>
+          <div className="removed-source-list">
+            {removedSources.map((source) => (
+              <div className="removed-source-row" key={source.id}>
+                <div className="removed-source-state"><Trash2 size={15} /></div>
+                <div className="removed-source-copy"><strong>{source.name}</strong><span title={source.local_path}>{source.local_path}</span><small>{source.skill_count} 个历史 Skill · {source.repository_exists ? "目录存在" : "目录不存在"} · {formatDate(source.updated_at)}</small></div>
+                <div className="removed-source-actions">
+                  <button className="button secondary compact" disabled={Boolean(busy) || !source.restorable} title={source.restorable ? "恢复原来源并重新扫描" : "原仓库目录不存在，无法恢复"} onClick={() => void restoreRemovedSource(source)}>{busy === `source-restore-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}恢复并扫描</button>
+                  <button className="button ghost compact danger" disabled={Boolean(busy)} onClick={() => void previewForget(source)}>{busy === `source-forget-preview-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}彻底移除记录</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {removalPreview && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeRemoval}>
+          <div ref={removalDialogRef} className="confirm-modal source-remove-modal" role="dialog" aria-modal="true" aria-labelledby="source-remove-title" aria-describedby="source-remove-description" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="confirm-icon danger"><Trash2 size={22} /></div>
+            <h2 id="source-remove-title">移除来源“{removalPreview.source.name}”</h2>
+            <p id="source-remove-description">将从 Adaptive Skills 目录隐藏该来源和 {removalPreview.skill_count} 个 Skill。Git 仓库不会删除，仍保留在原位置，并可随时恢复。</p>
+            <div className="confirm-summary source-remove-summary">
+              <span>仓库保留</span><strong title={removalPreview.repository_path}>{removalPreview.repository_path}</strong>
+              <span>受影响项目</span><strong>{removalPreview.affected_project_count}</strong>
+              <span>受管引用</span><strong>{removalPreview.reference_count} 个（{removalPreview.symlink_count} 软链接 · {removalPreview.copy_count} 副本）</strong>
+              <span>恢复外部内容</span><strong>{removalPreview.restore_count}</strong>
+            </div>
+            {removalPreview.references.length > 0 && <div className="source-remove-projects" aria-label="受影响的项目">{removalPreview.references.map((project) => <div className="source-remove-project" key={project.project_id}><div><strong>{project.display_name}</strong><span title={project.project_path}>{project.project_path}</span></div><ul>{project.entries.map((entry) => <li key={`${entry.path}-${entry.skill_id}`}><span>{entry.name || entry.skill_id}</span><small>{entry.mode === "symlink" ? "软链接" : "受管副本"} · {projectEntryStateLabel(entry.state)}{entry.restores_external ? " · 将恢复原内容" : ""}</small></li>)}</ul></div>)}</div>}
+            {removalPreview.reference_count > 0 && <label className="source-cleanup-choice"><input type="checkbox" disabled={Boolean(busy)} checked={cleanupReferences} onChange={(event) => setCleanupReferences(event.target.checked)} /><span><strong>同时清理受管引用</strong><small>默认移除上面列出的软链接和受管副本；关联过的外部 Skill 会恢复原内容。</small></span></label>}
+            {blockedCleanup && <div className="confirm-danger" role="alert"><AlertTriangle size={16} /><span>有 {removalPreview.blocker_count} 个引用已被修改或替换，不能安全清理。请先在项目页面处理，或取消勾选并明确保留引用。</span></div>}
+            {!cleanupReferences && removalPreview.reference_count > 0 && <div className="confirm-risk"><AlertTriangle size={16} /><span>这些引用会继续留在项目中，但来源移除后无法更新，并显示为“目录中已不存在”。</span></div>}
+            {removalPreview.inaccessible_projects.length > 0 && <div className="confirm-risk"><AlertTriangle size={16} /><span>另有 {removalPreview.inaccessible_projects.length} 个已登记项目当前无法读取，系统不能确认其中是否引用了此来源。</span></div>}
+            <div className="button-row align-end"><button className="button secondary" data-initial-focus disabled={Boolean(busy)} onClick={closeRemoval}>取消</button><button className="button danger" disabled={Boolean(busy) || blockedCleanup} onClick={() => void confirmRemoval()}>{busy === `source-remove-${removalPreview.source.id}` ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}{removalPreview.reference_count === 0 ? "移除来源" : cleanupReferences ? "清理引用并移除" : "保留引用并移除"}</button></div>
+          </div>
+        </div>
+      )}
+      {forgetPreview && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeForget}>
+          <div ref={forgetDialogRef} className="confirm-modal source-remove-modal" role="dialog" aria-modal="true" aria-labelledby="source-forget-title" aria-describedby="source-forget-description" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="confirm-icon danger"><Trash2 size={22} /></div>
+            <h2 id="source-forget-title">彻底移除“{forgetPreview.source.name}”的目录记录</h2>
+            <p id="source-forget-description">这会永久删除 SQLite 中的来源历史、Skill、分类评分、审查和评测记录。仓库文件绝不会被删除，但目录历史无法自动恢复。</p>
+            <div className="confirm-summary source-remove-summary">
+              <span>历史 Skill</span><strong>{forgetPreview.skill_count}</strong>
+              <span>分类 / 评分</span><strong>{forgetPreview.history.annotation_count}</strong>
+              <span>AI 评测</span><strong>{forgetPreview.history.evaluation_count}</strong>
+              <span>静态审查确认</span><strong>{forgetPreview.history.audit_review_count}</strong>
+              <span>仓库目录</span><strong title={forgetPreview.repository_path}>{forgetPreview.repository_exists ? "仍存在并保留" : "已不存在"} · {forgetPreview.repository_path}</strong>
+            </div>
+            {forgetPreview.profile_locator_count > 0 && <div className="confirm-risk"><AlertTriangle size={16} /><span>{forgetPreview.profile_locator_count} 个配置集条目会保留名称、来源和相对路径，仅清除失效的内部 Skill ID，以便将来重新匹配。</span></div>}
+            {forgetPreview.reference_count > 0 && <div className="confirm-danger" role="alert"><AlertTriangle size={16} /><span>仍有 {forgetPreview.reference_count} 个受管项目引用。请先在项目页面卸载这些 Skill，系统不会制造悬空引用。</span></div>}
+            {forgetPreview.inaccessible_projects.length > 0 && <div className="confirm-danger" role="alert"><AlertTriangle size={16} /><span>有 {forgetPreview.inaccessible_projects.length} 个已登记项目当前无法读取，无法确认引用安全；请先重新连接或移除对应项目记录。</span></div>}
+            {!blockedForget && <label className="source-forget-confirmation"><span>输入 <strong>{forgetPreview.source.name}</strong> 确认彻底移除目录记录</span><input data-initial-focus value={forgetConfirmation} onChange={(event) => setForgetConfirmation(event.target.value)} autoComplete="off" /></label>}
+            <div className="button-row align-end"><button className="button secondary" disabled={Boolean(busy)} onClick={closeForget}>取消</button><button className="button danger" disabled={Boolean(busy) || blockedForget || forgetConfirmation !== forgetPreview.source.name} onClick={() => void confirmForget()}>{busy === `source-forget-${forgetPreview.source.id}` ? <LoaderCircle className="spin" size={15} /> : <Trash2 size={15} />}彻底移除 SQLite 记录</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1304,17 +1595,20 @@ function EvaluationView({ snapshot, busy, onSaveProfile, onActivate, onDisable, 
 }
 
 function projectHistoryLabel(event: ProjectHistoryEvent): string {
-  const labels = { apply: "应用 Skills", sync: "同步来源变更", unlink: "移除 Skills" };
+  const labels = { apply: "应用 Skills", adopt: "迁移为受管理软链接", sync: "同步来源变更", unlink: "移除 Skills" };
   return `${labels[event.action]} · ${event.count} 项`;
 }
 
-function ProjectsView({ library, onError }: { library: string; onError: (message: string | null) => void }) {
+function ProjectsView({ library, categories, onError }: { library: string; categories: CategoryFilter[]; onError: (message: string | null) => void }) {
   const initialDraft = useMemo(() => loadProjectDraft(localStorage, library), [library]);
   const [screen, setScreen] = useState<"list" | "detail">("list");
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [project, setProject] = useState(initialDraft.project);
   const [requirement, setRequirement] = useState(initialDraft.requirement);
+  const [discoveryMode, setDiscoveryMode] = useState(initialDraft.discoveryMode);
+  const [categoryL1, setCategoryL1] = useState(initialDraft.categoryL1);
+  const [categoryL2, setCategoryL2] = useState(initialDraft.categoryL2);
   const [target, setTarget] = useState<ProjectDraft["target"]>(initialDraft.target);
   const [allowRisk, setAllowRisk] = useState(initialDraft.allowRisk);
   const [plan, setPlan] = useState<ProjectPlan | null>(null);
@@ -1325,13 +1619,73 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [riskConfirmed, setRiskConfirmed] = useState(false);
+  const [agentTargets, setAgentTargets] = useState<AgentTarget[]>([]);
+  const [matrix, setMatrix] = useState<ActivationMatrix | null>(null);
+  const [matrixQuery, setMatrixQuery] = useState("");
+  const [profiles, setProfiles] = useState<SkillProfileSummary[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [profilePreview, setProfilePreview] = useState<SkillProfilePreview | null>(null);
+  const [profileImportPreview, setProfileImportPreview] = useState<SkillProfileImportPreview | null>(null);
+  const [profileTransferMessage, setProfileTransferMessage] = useState("");
+  const [captureName, setCaptureName] = useState("");
+  const [planLoading, setPlanLoading] = useState(false);
+  const categoryRequestId = useRef(0);
   useEscapeKey(confirming, () => setConfirming(false));
+
+  const categoryLevelOnes = useMemo(() => {
+    const counts = new Map<string, number>();
+    categories.forEach((item) => {
+      if (!item.category_l1) return;
+      counts.set(item.category_l1, (counts.get(item.category_l1) || 0) + item.count);
+    });
+    return Array.from(counts, ([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
+  }, [categories]);
+  const categoryLevelTwos = useMemo(() => categories
+    .filter((item) => item.category_l1 === categoryL1 && item.category_l2)
+    .map((item) => ({ name: item.category_l2 as string, count: item.count }))
+    .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")), [categories, categoryL1]);
 
   useEffect(() => {
     saveProjectDraft(localStorage, library, {
-      project, requirement, target, allowRisk,
+      project, requirement, discoveryMode, categoryL1, categoryL2, target, allowRisk,
     });
-  }, [library, project, requirement, target, allowRisk]);
+  }, [library, project, requirement, discoveryMode, categoryL1, categoryL2, target, allowRisk]);
+
+  useEffect(() => {
+    if (discoveryMode !== "category" || !project.trim() || !categoryL1) {
+      setPlanLoading(false);
+      return;
+    }
+    const requestId = ++categoryRequestId.current;
+    setPlan(null);
+    setSelected(new Set());
+    setRiskConfirmed(false);
+    setPlanLoading(true);
+    const timer = window.setTimeout(() => {
+      onError(null);
+      void api.projectPlan(
+        library,
+        project,
+        "",
+        target,
+        allowRisk,
+        categoryL1,
+        categoryL2,
+      ).then((next) => {
+        if (categoryRequestId.current !== requestId) return;
+        setPlan(next);
+      }).catch((reason) => {
+        if (categoryRequestId.current !== requestId) return;
+        onError(reason instanceof Error ? reason.message : String(reason));
+      }).finally(() => {
+        if (categoryRequestId.current === requestId) setPlanLoading(false);
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      if (categoryRequestId.current === requestId) categoryRequestId.current += 1;
+    };
+  }, [allowRisk, categoryL1, categoryL2, discoveryMode, library, onError, project, target]);
 
   const loadProjects = useCallback(async () => {
     setProjectsLoading(true);
@@ -1340,7 +1694,34 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
     finally { setProjectsLoading(false); }
   }, [library, onError]);
 
-  useEffect(() => { void loadProjects(); }, [loadProjects]);
+  const loadMatrix = useCallback(async (query = "") => {
+    try { setMatrix(await api.projectMatrix(library, query, 20)); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+  }, [library, onError]);
+
+  const loadProfiles = useCallback(async () => {
+    try {
+      const nextProfiles = await api.profileList(library);
+      setProfiles(nextProfiles);
+      setSelectedProfileId((current) =>
+        current && nextProfiles.some((item) => item.id === current) ? current : "",
+      );
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [library, onError]);
+
+  const loadAgentTargets = useCallback(async () => {
+    try { setAgentTargets(await api.agentTargets(library)); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); }
+  }, [library, onError]);
+
+  useEffect(() => {
+    void loadProjects();
+    void loadMatrix();
+    void loadProfiles();
+    void loadAgentTargets();
+  }, [loadAgentTargets, loadMatrix, loadProfiles, loadProjects]);
 
   const loadProjectContext = useCallback(async (path: string, reportError = false) => {
     if (!path.trim()) { setStatus(null); setHistory([]); return; }
@@ -1366,14 +1747,14 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   const chooseProject = async () => {
     const selectedPath = await open({ directory: true, multiple: false, title: "选择要初始化的项目" });
     if (typeof selectedPath === "string") {
-      setProject(selectedPath); setPlan(null); setStatus(null); setSelected(new Set());
+      setProject(selectedPath); setPlan(null); setStatus(null); setSelected(new Set()); setProfilePreview(null);
       await loadProjectContext(selectedPath, true);
     }
   };
 
   const openManagedProject = async (item: ProjectSummary) => {
     if (item.status !== "active") return;
-    setProject(item.path); setPlan(null); setSelected(new Set()); setScreen("detail");
+    setProject(item.path); setTarget(item.project_kind === "system" ? "root" : "auto"); setPlan(null); setSelected(new Set()); setProfilePreview(null); setScreen("detail");
     await loadProjectContext(item.path, true);
   };
 
@@ -1383,7 +1764,7 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
     if (project && project !== selectedPath && !window.confirm("选择其他项目会替换当前项目草稿，是否继续？")) return;
     await run("project-add", async () => {
       const selectedStatus = await api.projectStatus(library, selectedPath);
-      setPlan(null); setSelected(new Set()); setRiskConfirmed(false);
+      setPlan(null); setSelected(new Set()); setRiskConfirmed(false); setProfilePreview(null);
       if (selectedStatus.managed) {
         const registered = await api.projectRegister(library, selectedPath);
         await loadProjects();
@@ -1417,11 +1798,273 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
     try { await action(); } catch (reason) { onError(reason instanceof Error ? reason.message : String(reason)); } finally { setBusy(null); }
   }
 
+  const refreshControlState = async () => {
+    await Promise.all([
+      loadProjects(),
+      loadMatrix(matrixQuery),
+      loadProfiles(),
+    ]);
+  };
+
+  const searchMatrix = () => run("matrix-load", async () => {
+    await loadMatrix(matrixQuery);
+  });
+
+  const openMatrixTarget = (matrixTarget: ActivationTarget) => {
+    if (!matrixTarget.exists) return;
+    setProject(matrixTarget.path);
+    setTarget("root");
+    setPlan(null);
+    setSelected(new Set());
+    setProfilePreview(null);
+    setScreen("detail");
+    void loadProjectContext(matrixTarget.path, true);
+  };
+
+  const installFromMatrix = (
+    row: ActivationRow,
+    cell: ActivationCell,
+    matrixTarget: ActivationTarget,
+  ) => {
+    const riskCopy = isElevatedRisk(cell.audit_severity)
+      ? " 该 Skill 带有高风险信号，本次操作会记录风险确认。"
+      : "";
+    if (!window.confirm(
+      "将“" + row.name + "”以受管软链接安装到 " + matrixTarget.label +
+      "？\n目标：" + cell.path + "。" + riskCopy,
+    )) return;
+    void run("matrix-install", async () => {
+      await api.projectApply(
+        library,
+        matrixTarget.path,
+        [cell.skill_id],
+        "Agent 全局安装矩阵",
+        "root",
+        allowRisk,
+      );
+      await refreshControlState();
+    });
+  };
+
+  const uninstallFromMatrix = (
+    row: ActivationRow,
+    cell: ActivationCell,
+    matrixTarget: ActivationTarget,
+  ) => {
+    if (!cell.installed_skill_id) return;
+    if (!window.confirm(
+      "从 " + matrixTarget.label + " 卸载“" + row.name +
+      "”的受管软链接？目录仓库中的 Skill 不会被删除。",
+    )) return;
+    void run("matrix-uninstall", async () => {
+      await api.projectUnlink(
+        library,
+        matrixTarget.path,
+        [cell.installed_skill_id as string],
+      );
+      await refreshControlState();
+    });
+  };
+
+  const adoptFromMatrix = (
+    row: ActivationRow,
+    cell: ActivationCell,
+    matrixTarget: ActivationTarget,
+  ) => {
+    if (!cell.adopt_skill_id) return;
+    if (!window.confirm(
+      "将 " + matrixTarget.label + " 中外部已有的“" + row.name +
+      "”迁移为受管理软链接？\n\n原目录会先备份到该 Agent 目录的 .adaptive-skills/external-backups/，" +
+      "再链接到 ~/skills 中的所选版本；任何一步失败都会恢复原目录。" +
+      (cell.content_match === false ? "\n\n注意：所选仓库版本与外部副本内容不同，原内容会完整保留在备份中。" : ""),
+    )) return;
+    void run("matrix-adopt", async () => {
+      await api.projectAdopt(
+        library,
+        matrixTarget.path,
+        row.name,
+        cell.adopt_skill_id as string,
+        allowRisk,
+        cell.content_match === false,
+      );
+      await refreshControlState();
+    });
+  };
+
+  const selectProfile = (profileId: string) => {
+    setSelectedProfileId(profileId);
+    setProfilePreview(null);
+    setProfileTransferMessage("");
+  };
+
+  const previewProfile = () => {
+    if (!selectedProfileId || !project) return;
+    void run("profile-preview", async () => {
+      setProfilePreview(
+        await api.profilePreview(
+          library,
+          selectedProfileId,
+          project,
+          target,
+          allowRisk,
+        ),
+      );
+    });
+  };
+
+  const applyProfile = () => {
+    if (!profilePreview || !selectedProfileId) return;
+    if (!window.confirm(
+      "将配置集“" + profilePreview.profile.name + "”应用到当前目标？\n" +
+      profilePreview.counts.install + " 项将创建受管软链接，" +
+      profilePreview.counts["already-installed"] + " 项保持不变。",
+    )) return;
+    void run("profile-apply", async () => {
+      await api.profileApply(
+        library,
+        selectedProfileId,
+        project,
+        target,
+        allowRisk,
+      );
+      await loadProjectContext(project);
+      await refreshControlState();
+      setProfilePreview(
+        await api.profilePreview(
+          library,
+          selectedProfileId,
+          project,
+          target,
+          allowRisk,
+        ),
+      );
+    });
+  };
+
+  const captureProfile = () => {
+    if (!captureName.trim() || !project) return;
+    void run("profile-capture", async () => {
+      const captured = await api.profileCapture(
+        library,
+        project,
+        captureName.trim(),
+      );
+      setCaptureName("");
+      await loadProfiles();
+      setSelectedProfileId(captured.id);
+      setProfilePreview(
+        await api.profilePreview(
+          library,
+          captured.id,
+          project,
+          target,
+          allowRisk,
+        ),
+      );
+    });
+  };
+
+  const deleteProfile = () => {
+    const selectedProfile = profiles.find((item) => item.id === selectedProfileId);
+    if (!selectedProfile) return;
+    if (!window.confirm(
+      "删除配置集“" + selectedProfile.name +
+      "”？已经安装到 Agent 或项目中的 Skill 不会被卸载。",
+    )) return;
+    void run("profile-delete", async () => {
+      await api.profileDelete(library, selectedProfile.id);
+      setSelectedProfileId("");
+      setProfilePreview(null);
+      await loadProfiles();
+    });
+  };
+
+  const chooseProfileImport = async () => {
+    const selectedPath = await open({
+      directory: false,
+      multiple: false,
+      title: "选择 Adaptive Skills 配置集",
+      filters: [{ name: "Adaptive Skills 配置集", extensions: ["json"] }],
+    });
+    if (typeof selectedPath !== "string") return;
+    void run("profile-import-preview", async () => {
+      setProfileTransferMessage("");
+      setProfileImportPreview(
+        await api.profileImportPreview(library, selectedPath),
+      );
+    });
+  };
+
+  const importProfile = () => {
+    if (!profileImportPreview?.can_import) return;
+    void run("profile-import", async () => {
+      const imported = await api.profileImport(
+        library,
+        profileImportPreview.path,
+        profileImportPreview.sha256,
+      );
+      await loadProfiles();
+      setSelectedProfileId(imported.profile.id);
+      setProfilePreview(null);
+      setProfileImportPreview(null);
+      setProfileTransferMessage(
+        imported.changed
+          ? "已导入“" + imported.profile.name + "”；尚未安装任何 Skill。"
+          : "完全相同的配置集已存在，本次没有创建重复记录。",
+      );
+    });
+  };
+
+  const exportProfile = async () => {
+    const selectedProfile = profiles.find((item) => item.id === selectedProfileId);
+    if (!selectedProfile) return;
+    const safeName = selectedProfile.name
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+      .slice(0, 80) || "skill-profile";
+    const destination = await saveFile({
+      title: "导出 Adaptive Skills 配置集",
+      defaultPath: safeName + ".adaptive-skills.json",
+      filters: [{ name: "Adaptive Skills 配置集", extensions: ["json"] }],
+    });
+    if (typeof destination !== "string") return;
+    void run("profile-export", async () => {
+      const exported = await api.profileExport(
+        library,
+        selectedProfile.id,
+        destination,
+        true,
+      );
+      setProfileTransferMessage(
+        "已导出“" + exported.profile.name + "”到 " + exported.path,
+      );
+    });
+  };
+
   const createPlan = () => run("plan", async () => {
     const next = await api.projectPlan(library, project, requirement, target, allowRisk);
     setPlan(next); setSelected(new Set()); setRiskConfirmed(false);
     await loadProjectContext(project);
   });
+
+  const refreshPlanIfPresent = async () => {
+    if (!plan) return;
+    const next = await api.projectPlan(
+      library,
+      project,
+      discoveryMode === "requirement" ? requirement : "",
+      target,
+      allowRisk,
+      discoveryMode === "category" ? categoryL1 : "",
+      discoveryMode === "category" ? categoryL2 : "",
+    );
+    setPlan(next);
+    setSelected((current) => new Set(
+      Array.from(current).filter((skillId) => {
+        const skill = next.recommendations.find((item) => item.id === skillId);
+        return skill ? canSelectSkill(skill, allowRisk) : false;
+      }),
+    ));
+  };
 
   const toggle = (skill: SkillSummary) => {
     if (!canSelectSkill(skill, allowRisk)) return;
@@ -1434,11 +2077,27 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
 
   const riskySelected = plan ? selectedRiskCount(plan.recommendations, selected) : 0;
   const apply = () => run("apply", async () => {
-    await api.projectApply(library, project, Array.from(selected), requirement, target, allowRisk);
-    await loadProjectContext(project); await loadProjects(); setConfirming(false); setSelected(new Set());
+    await api.projectApply(library, project, Array.from(selected), plan?.requirement || requirement, target, allowRisk);
+    await refreshPlanIfPresent(); await loadProjectContext(project); await refreshControlState(); setConfirming(false); setSelected(new Set());
   });
-  const sync = (force = false) => run("sync", async () => { await api.projectSync(library, project, allowRisk, force); await loadProjectContext(project); await loadProjects(); });
-  const unlinkEntry = (skillId: string, force = false) => run("unlink", async () => { await api.projectUnlink(library, project, [skillId], force); await loadProjectContext(project); await loadProjects(); });
+  const sync = (force = false) => run("sync", async () => { await api.projectSync(library, project, allowRisk, force); await refreshPlanIfPresent(); await loadProjectContext(project); await refreshControlState(); });
+  const unlinkEntry = (skillId: string, force = false) => run("unlink", async () => { await api.projectUnlink(library, project, [skillId], force); await refreshPlanIfPresent(); await loadProjectContext(project); await refreshControlState(); });
+  const adoptExternal = (entry: ProjectExternalEntry, match: ProjectExternalMatch) => {
+    const preservesCopy = entry.entry_type === "directory";
+    const versionWarning = match.content_match
+      ? ""
+      : "\n\n注意：目录中的内容与所选仓库版本不同。迁移后会使用仓库版本，原内容仍完整保留在备份中。";
+    const message = preservesCopy
+      ? `将“${entry.name}”迁移为受管理软链接？\n\n原目录：${project}/${entry.path}\n备份位置：${project}/.adaptive-skills/external-backups/\n链接目标：${match.target_path}${versionWarning}\n\nAdaptive Skills 会先完成备份，再替换为软链接；任何一步失败都会恢复原目录。以后卸载时也会恢复这份备份。`
+      : `将“${entry.name}”关联到目录中的 ${match.source_name}/${match.name}？现有软链接会登记为 Adaptive Skills 管理，之后可以同步或卸载。`;
+    if (!window.confirm(message)) return;
+    void run("adopt", async () => {
+      await api.projectAdopt(library, project, entry.name, match.id, allowRisk, !match.content_match);
+      await refreshPlanIfPresent();
+      await loadProjectContext(project);
+      await refreshControlState();
+    });
+  };
   const requestSync = () => {
     if (!status) return;
     const forceCount = status.entries.filter((entry) => projectEntryRequiresForce(entry.state)).length;
@@ -1449,88 +2108,163 @@ function ProjectsView({ library, onError }: { library: string; onError: (message
   };
   const requestUnlinkEntry = (entry: ProjectEntryStatus) => {
     const force = projectEntryRequiresForce(entry.state);
-    const message = force
+    const message = entry.restores_external && !force
+      ? `卸载“${entry.name || entry.skill_id}”的受管链接，并恢复关联前保留的外部目录？目录中的来源不会被删除。`
+      : force
       ? `“${entry.name || entry.skill_id}”在项目内已有改动或被其他内容替换。强制移除会删除当前路径及其中改动，且无法由 Adaptive Skills 恢复。确认继续？`
       : `从项目中移除“${entry.name || entry.skill_id}”的受管链接？Skill 来源不会被删除。`;
     if (!window.confirm(message)) return;
     void unlinkEntry(entry.skill_id, force);
   };
+  const changeDiscoveryMode = (next: ProjectDraft["discoveryMode"]) => {
+    if (next === discoveryMode) return;
+    setDiscoveryMode(next);
+    setPlan(null);
+    setSelected(new Set());
+    setRiskConfirmed(false);
+    setProfilePreview(null);
+  };
   const clearDraft = () => {
     clearProjectDraft(localStorage, library);
     setProject(EMPTY_PROJECT_DRAFT.project);
     setRequirement(EMPTY_PROJECT_DRAFT.requirement);
+    setDiscoveryMode(EMPTY_PROJECT_DRAFT.discoveryMode);
+    setCategoryL1(EMPTY_PROJECT_DRAFT.categoryL1);
+    setCategoryL2(EMPTY_PROJECT_DRAFT.categoryL2);
     setTarget(EMPTY_PROJECT_DRAFT.target);
     setAllowRisk(EMPTY_PROJECT_DRAFT.allowRisk);
-    setPlan(null); setStatus(null); setHistory([]); setSelected(new Set());
+    setPlan(null); setStatus(null); setHistory([]); setSelected(new Set()); setProfilePreview(null); setCaptureName("");
   };
 
   if (screen === "list") {
     return <div className="stack gap-lg project-index">
       <section className="panel project-index-hero">
-        <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>选择需要使用 Skills 的代码项目，而不是 Skills 仓库目录。系统会自动识别新项目或恢复已有 manifest 的项目。</p></div>
+        <div><span className="eyebrow">Managed projects</span><h2>项目 Skills 工作区</h2><p>本机 Agent 全局目录会作为系统项目自动出现；也可以添加普通代码项目，按需求挂载目录中的 Skills。</p></div>
         <button className="button primary" disabled={Boolean(busy)} onClick={() => void addProject()}>{busy === "project-add" ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}添加项目</button>
       </section>
-      {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
+      {project && !projects.some((item) => item.path === project) && <button className="panel project-draft-card" onClick={() => { setScreen("detail"); void loadProjectContext(project); }}><div><span className="badge warning">继续当前草稿</span><strong>{project}</strong><p>{discoveryMode === "category" ? categoryL1 ? `分类：${categoryL1}${categoryL2 ? ` / ${categoryL2}` : ""}` : "尚未选择分类" : requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
       <section className="project-index-grid">
         {projects.map((item) => <article className={`panel managed-project-card status-${item.status}`} key={item.id}>
-          <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon"><Link2 size={18} /></div><div><span className={`badge ${item.status === "active" ? item.clean ? "success" : "warning" : "warning"}`}>{item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
-          <div className="managed-project-meta"><span>{item.entry_count} 个 Skills</span><span>{item.history_count} 条操作</span><span>{formatDate(item.last_activity_at)}</span></div>
-          <div className="managed-project-actions">{item.status !== "active" && <button className="text-button" onClick={() => void relinkProject(item)}><FolderOpen size={13} />重新定位</button>}<button className="text-button danger" onClick={() => void forgetProject(item)}><Trash2 size={13} />仅从列表移除</button></div>
+          <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon">{item.project_kind === "system" ? <Database size={18} /> : <Link2 size={18} />}</div><div><div className="project-card-badges">{item.project_kind === "system" && <span className="badge neutral">系统项目</span>}<span className={`badge ${item.status === "active" ? item.clean ? "success" : "warning" : "warning"}`}>{item.project_kind === "system" && item.status === "active" ? item.clean ? "已连接" : "有漂移" : item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span></div><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
+          <div className="managed-project-meta"><span>{item.entry_count} 个受管</span>{item.project_kind === "system" && <span>{item.external_count} 个外部已有</span>}<span>{item.history_count} 条操作</span><span>{formatDate(item.last_activity_at)}</span></div>
+          <div className="managed-project-actions">{item.project_kind === "system" ? <span className="protected-project-note"><ShieldCheck size={13} />与初始化发现范围同步 · 不可删除</span> : <>{item.status !== "active" && <button className="text-button" onClick={() => void relinkProject(item)}><FolderOpen size={13} />重新定位</button>}<button className="text-button danger" onClick={() => void forgetProject(item)}><Trash2 size={13} />仅从列表移除</button></>}</div>
         </article>)}
       </section>
       {projectsLoading && <div className="history-empty"><LoaderCircle className="spin" size={18} /><span>正在读取项目列表…</span></div>}
-      {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有管理过的项目</h3><p>添加普通代码项目后可为它选择 Skills；若目录已有 manifest，会自动恢复历史和软链接状态。</p></div>}
+      {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有可用的项目</h3><p>检测到 Agent 全局 Skills 目录后会自动显示系统项目；也可以添加普通代码项目并按需挂载 Skills。</p></div>}
+      <ProjectActivationMatrix
+        matrix={matrix}
+        query={matrixQuery}
+        busy={busy}
+        allowRisk={allowRisk}
+        onQuery={setMatrixQuery}
+        onSearch={searchMatrix}
+        onAllowRisk={(value) => {
+          setAllowRisk(value);
+          setProfilePreview(null);
+        }}
+        onInstall={installFromMatrix}
+        onUninstall={uninstallFromMatrix}
+        onAdopt={adoptFromMatrix}
+        onOpenTarget={openMatrixTarget}
+      />
     </div>;
   }
 
   return (
     <div className="project-layout">
       <section className="panel project-builder">
-        <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> 项目与需求</div><button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button></div>
-        <h2>按项目选择 Skills</h2><p className="muted">先生成可解释方案；只有被勾选的 Skill 才会创建软链接。</p>
-        {status && !status.managed && <div className="project-setup-notice"><Sparkles size={16} /><span>这是尚未接入 Adaptive Skills 的普通项目。首次应用 Skill 后会创建 manifest，并加入项目历史列表。</span></div>}
-        <label className="input-field"><span>项目目录</span><div className="input-with-button"><input value={project} onChange={(event) => setProject(event.target.value)} placeholder="/path/to/project" /><button type="button" onClick={chooseProject}><FolderOpen size={17} /></button></div></label>
-        <label className="input-field"><span>项目需要什么能力？</span><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} rows={5} placeholder="例如：根据技术方案制作结构清晰的中文演示文稿，并检查视觉一致性。" /></label>
-        <div className="two-columns"><label className="input-field"><span>目标 Agent</span><select value={target} onChange={(event) => setTarget(event.target.value as ProjectDraft["target"])}><option value="auto">通用 .agents/skills</option><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label><label className="risk-toggle"><input type="checkbox" checked={allowRisk} onChange={(event) => { setAllowRisk(event.target.checked); setPlan(null); setSelected(new Set()); }} /><span><ShieldAlert size={17} /><strong>显示高风险结果</strong><small>应用前仍需二次确认</small></span></label></div>
-        <button className="button primary wide" disabled={!project.trim() || !requirement.trim() || Boolean(busy)} onClick={() => void createPlan()}>{busy === "plan" ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}生成推荐方案</button>
+        <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> {status?.project_kind === "system" ? "Agent 全局映射" : "项目与发现方式"}</div>{status?.project_kind === "system" ? <span className="badge neutral">系统项目</span> : <button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button>}</div>
+        <h2>{status?.project_kind === "system" ? "管理 Agent 全局 Skills" : "按项目选择 Skills"}</h2><p className="muted">{status?.project_kind === "system" ? "系统项目始终保留；可以卸载受管 Skill，外部已有内容默认只读。" : "按需求检索或按分类浏览；只有被勾选的 Skill 才会创建软链接。"}</p>
+        {status && status.project_kind === "project" && !status.managed && <div className="project-setup-notice"><Sparkles size={16} /><span>这是尚未接入 Adaptive Skills 的普通项目。首次应用 Skill 后会创建 manifest，并加入项目历史列表。</span></div>}
+        {status?.project_kind === "system" && <div className="project-setup-notice"><ShieldCheck size={16} /><span>此映射来自初始化的 Discovery Scope，与本机 Agent 全局目录保持一致，不能从项目列表移除或重新定位。</span></div>}
+        <label className="input-field"><span>{status?.project_kind === "system" ? "Agent 全局 Skills 目录" : "项目目录"}</span><div className={status?.project_kind === "system" ? "input-with-button locked" : "input-with-button"}><input value={project} readOnly={status?.project_kind === "system"} onChange={(event) => { setProject(event.target.value); setPlan(null); setSelected(new Set()); }} placeholder="/path/to/project" />{status?.project_kind !== "system" && <button type="button" onClick={chooseProject}><FolderOpen size={17} /></button>}</div></label>
+        <div className="input-field discovery-method-field"><span>查找方式</span><div className="discovery-method" role="group" aria-label="选择 Skill 查找方式"><button type="button" className={discoveryMode === "requirement" ? "active" : ""} aria-pressed={discoveryMode === "requirement"} onClick={() => changeDiscoveryMode("requirement")}><Search size={14} />需求检索</button><button type="button" className={discoveryMode === "category" ? "active" : ""} aria-pressed={discoveryMode === "category"} onClick={() => changeDiscoveryMode("category")}><Layers3 size={14} />分类浏览</button></div></div>
+        {discoveryMode === "requirement" ? <label className="input-field"><span>项目需要什么能力？</span><textarea value={requirement} onChange={(event) => { setRequirement(event.target.value); setPlan(null); setSelected(new Set()); }} rows={5} placeholder="例如：根据技术方案制作结构清晰的中文演示文稿，并检查视觉一致性。" /></label> : <div className="category-browser"><div className="two-columns"><label className="input-field"><span>一级分类</span><select value={categoryL1} onChange={(event) => { setCategoryL1(event.target.value); setCategoryL2(""); }}><option value="" disabled>选择一级分类</option>{categoryLevelOnes.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.count}</option>)}</select></label><label className="input-field"><span>二级分类</span><select value={categoryL2} disabled={!categoryL1} onChange={(event) => setCategoryL2(event.target.value)}><option value="">全部二级分类</option>{categoryLevelTwos.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.count}</option>)}</select></label></div><p className="category-auto-state">{!project.trim() ? "先选择项目目录，分类结果会显示在右侧" : planLoading ? <><LoaderCircle className="spin" size={13} />正在读取分类…</> : categoryL1 ? <><Check size={13} />分类变化后，右侧会自动更新</> : "当前目录还没有可浏览的分类"}</p></div>}
+        <div className="two-columns"><label className="input-field"><span>目标 Agent</span><select value={target} disabled={status?.project_kind === "system"} onChange={(event) => { setTarget(event.target.value as ProjectDraft["target"]); setPlan(null); setSelected(new Set()); setProfilePreview(null); }}><option value="root" disabled={status?.project_kind !== "system"}>当前 Agent 全局目录</option>{agentTargets.map((item) => <option key={item.id} value={item.id === "agents" ? "auto" : item.id}>{item.label} · {item.project_path}</option>)}</select></label><label className="risk-toggle"><input type="checkbox" checked={allowRisk} onChange={(event) => { setAllowRisk(event.target.checked); setPlan(null); setSelected(new Set()); setProfilePreview(null); }} /><span><ShieldAlert size={17} /><strong>显示高风险结果</strong><small>应用前仍需二次确认</small></span></label></div>
+        {discoveryMode === "requirement" && <button className="button primary wide" disabled={!project.trim() || !requirement.trim() || Boolean(busy)} onClick={() => void createPlan()}>{busy === "plan" ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}生成推荐方案</button>}
       </section>
 
       <section className="project-results">
-        {!plan ? (
+        {planLoading ? (
+          <div className="project-placeholder recommendation-placeholder recommendation-loading" role="status">
+            <div className="recommendation-placeholder-heading"><div className="recommendation-placeholder-icon"><LoaderCircle className="spin" size={18} /></div><div><h3>正在读取分类</h3><p>正在从本地 SQLite 目录中整理“{categoryL2 || categoryL1}”下可用于当前 Agent 的 Skills。</p></div></div>
+          </div>
+        ) : !plan ? (
           <div className="project-placeholder recommendation-placeholder">
-            <div className="recommendation-placeholder-heading"><div className="recommendation-placeholder-icon"><Sparkles size={18} /></div><div><h3>推荐结果将在这里显示</h3><p>填写项目目录和能力需求后，点击“生成推荐方案”。系统会从本地 Skill 目录中匹配并解释推荐结果。</p></div></div>
-            <div className="recommendation-preview" aria-label="推荐结果包含的信息"><span><Search size={13} />匹配理由</span><span><CircleGauge size={13} />质量评分</span><span><ShieldCheck size={13} />风险提示</span></div>
+            <div className="recommendation-placeholder-heading"><div className="recommendation-placeholder-icon"><Sparkles size={18} /></div><div><h3>Skills 将在这里显示</h3><p>可以描述项目需求生成匹配方案，也可以切换到“分类浏览”，选择分类后直接查看本地 Skills。</p></div></div>
+            <div className="recommendation-preview" aria-label="结果包含的信息"><span><Search size={13} />需求匹配</span><span><Layers3 size={13} />分类浏览</span><span><CircleGauge size={13} />质量评分</span><span><ShieldCheck size={13} />风险提示</span></div>
           </div>
         ) : (
           <div className="stack gap-md">
-            <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>推荐 {plan.recommendations.length} 个 Skills</h2></div><span className="selection-count">已选择 {selected.size}</span></div>
-            <div className="recommendation-list">
+            <div className="result-heading"><div><span className="eyebrow">Step 2 · Review</span><h2>{plan.discovery_mode === "category" ? `“${plan.category_l2 || plan.category_l1}”下的 ${plan.recommendations.length} 个 Skills` : `推荐 ${plan.recommendations.length} 个 Skills`}</h2><p className="recommendation-scope" title={plan.library_root}>{plan.discovery_mode === "category" ? `分类浏览 · ${plan.category_l1}${plan.category_l2 ? ` / ${plan.category_l2}` : ""}` : "需求检索"} · 当前 Skill 仓库：{plan.library_root}</p></div><span className="selection-count">已选择 {selected.size}</span></div>
+            {plan.recommendations.length ? <div className="recommendation-list">
               {plan.recommendations.map((skill, index) => {
                 const selectable = canSelectSkill(skill, allowRisk);
+                const projectState = skill.project_selection_state ?? "available";
+                const projectBlocked = projectState !== "available";
+                const stateDetail = skill.project_entry_state
+                  ? projectEntryStateLabel(skill.project_entry_state)
+                  : null;
+                const blockedLabel = projectSelectionStateLabel(projectState);
+                const blockedTitle = projectBlocked
+                  ? `${blockedLabel}${stateDetail ? ` · ${stateDetail}` : ""}${skill.project_entry_path ? ` · ${skill.project_entry_path}` : ""}`
+                  : undefined;
                 return (
-                  <button className={`recommendation ${selected.has(skill.id) ? "selected" : ""} ${!selectable ? "disabled" : ""}`} key={skill.id} onClick={() => toggle(skill)} disabled={!selectable}>
-                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className="checkbox">{selected.has(skill.id) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong><i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}</span><p>{skill.description}</p><small>{skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title="需求匹配排序分，不是 0–10 质量分"><small>匹配</small>{skill.score?.toFixed(1) || "—"}</span>
+                  <button className={`recommendation ${selected.has(skill.id) ? "selected" : ""} ${!selectable ? "disabled" : ""} ${projectBlocked ? "already-added" : !selectable ? "unavailable" : ""}`} key={skill.id} onClick={() => toggle(skill)} disabled={!selectable} title={blockedTitle}>
+                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className={`checkbox ${projectBlocked ? "installed" : ""}`}>{(projectBlocked || selected.has(skill.id)) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong>{projectBlocked && <i className={projectState === "installed" ? "badge success" : "badge warning"}>{blockedLabel}{stateDetail && stateDetail !== "已同步" ? ` · ${stateDetail}` : ""}</i>}<i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && plan.discovery_mode !== "category" && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}{(skill.variant_count ?? 0) > 1 && <i className="badge neutral">已归并 {skill.variant_count} 个适配版本</i>}</span><p>{skill.description}</p><small>{plan.discovery_mode === "category" ? `${skill.category_l1}${skill.category_l2 ? ` / ${skill.category_l2}` : ""} · ${skill.source_name}` : skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title={plan.discovery_mode === "category" ? "按智能评分降序展示，未评分的 Skill 按名称排列" : "需求匹配排序分，不是 0–10 质量分"}><small>{plan.discovery_mode === "category" ? "质量" : "匹配"}</small>{plan.discovery_mode === "category" ? skill.annotation_score?.toFixed(1) || "—" : skill.score?.toFixed(1) || "—"}</span>
                   </button>
                 );
               })}
-            </div>
+            </div> : <div className="category-empty"><Layers3 size={20} /><strong>这个分类暂无可展示的 Skill</strong><span>可能是分类内没有有效 Skill，或高风险结果当前被隐藏。可以选择上一级分类或开启风险结果后重试。</span></div>}
             <button className="button primary wide" disabled={!selected.size || Boolean(busy)} onClick={() => setConfirming(true)}><Link2 size={17} />预览并应用 {selected.size} 个 Skills</button>
           </div>
         )}
 
         {status && status.entries.length > 0 && (
           <section className="panel project-status-panel">
-            <div className="panel-heading"><div><span className="eyebrow">Managed manifest</span><h3>已挂载 Skills</h3></div><span className={status.clean ? "badge success" : "badge warning"}>{status.clean ? "全部同步" : "检测到漂移"}</span></div>
-            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}</span></div><span className="entry-state">{projectEntryStateLabel(entry.state)}</span><button aria-label={`移除 ${entry.name || entry.skill_id}`} title={projectEntryRequiresForce(entry.state) ? "强制移除项目内已改动的条目" : "移除受管链接"} disabled={Boolean(busy)} onClick={() => requestUnlinkEntry(entry)}><Unlink size={15} /></button></div>)}</div>
+            <div className="panel-heading"><div><span className="eyebrow">Adaptive managed</span><h3>Adaptive 管理</h3></div><span className={status.clean ? "badge success" : "badge warning"}>{status.clean ? "全部同步" : "检测到漂移"}</span></div>
+            <div className="manifest-list">{status.entries.map((entry) => <div className="manifest-row" key={entry.skill_id}><div className={`state-icon ${entry.state === "clean" ? "clean" : "drift"}`}>{entry.state === "clean" ? <Check size={14} /> : <AlertTriangle size={14} />}</div><div><strong>{entry.name || entry.skill_id}</strong><span>{entry.path} · {entry.mode}{entry.restores_external ? " · 卸载时恢复原目录" : ""}</span></div><span className="entry-state">{projectEntryStateLabel(entry.state)}</span><button aria-label={`卸载 ${entry.name || entry.skill_id}`} title={projectEntryRequiresForce(entry.state) ? "强制移除已改动的受管条目" : entry.restores_external ? "卸载软链接并恢复原目录" : "卸载受管链接"} disabled={Boolean(busy)} onClick={() => requestUnlinkEntry(entry)}><Unlink size={15} /></button></div>)}</div>
             {status.entries.some((entry) => entry.state === "catalog-missing") && <div className="project-drift-warning"><AlertTriangle size={16} /><span>有条目已不在 Skills 目录中，无法同步。确认项目内容后，请先用右侧按钮从 manifest 移除。</span></div>}
             {status.entries.some((entry) => projectEntryCanSync(entry.state)) && <button className={`button wide ${status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "warning" : "secondary"}`} disabled={Boolean(busy)} onClick={requestSync}><RefreshCw size={16} />{status.entries.some((entry) => projectEntryRequiresForce(entry.state)) ? "确认并覆盖项目漂移" : "同步来源变更"}</button>}
           </section>
         )}
 
+        {status?.project_kind === "system" && (
+          <section className="panel project-status-panel external-skill-panel">
+            <div className="panel-heading"><div><span className="eyebrow">External existing</span><h3>外部已有</h3></div><span className="badge neutral">{status.external_entries.length} 项 · 只读</span></div>
+            <p className="external-panel-copy">这里区分宿主自带与用户实体副本。Claude/Codex 自带 Skill 保持宿主管理；用户实体副本只有与目录中的同名 Skill 内容完全一致时，才可先备份再迁移为受管理软链接。</p>
+            {status.external_entries.length ? <div className="external-skill-list">{status.external_entries.map((entry) => <div className="external-skill-row" key={entry.path}><div className="external-skill-state">{entry.management_state === "provider-owned" ? <ShieldCheck size={15} /> : <FolderOpen size={15} />}</div><div className="external-skill-copy"><div><strong>{entry.name}</strong><span className="badge neutral">{entry.management_state === "provider-owned" ? `${entry.provider || "宿主"} 自带` : "外部已有"}</span><span className="badge neutral">{entry.entry_type === "symlink" ? "软链接" : "实体目录"}</span></div><small title={`${project}/${entry.path}`}>{entry.path}</small>{entry.management_state === "provider-owned" ? <p>{entry.protected_reason || "由宿主自行更新，Adaptive Skills 不迁移。"}</p> : entry.matches.length === 0 ? <p>目录中没有发现同名的仓库 Skill，保持外部只读。</p> : null}{entry.matches.map((match) => <div className="external-match" key={match.id}><span>{entry.migration_mode === "backup-and-link" ? "迁移目标" : "可关联"}：{match.source_name}/{match.name} · {match.content_match ? "内容一致" : "版本不同"}</span><button className="button secondary" disabled={Boolean(busy) || !entry.migratable && entry.migration_mode !== "associate-link" || !match.valid || (isElevatedRisk(match.audit_severity) && !allowRisk)} title={isElevatedRisk(match.audit_severity) && !allowRisk ? "请先开启“显示高风险结果”并完成风险确认" : entry.migration_mode === "backup-and-link" ? "确认后先备份原目录，再建立受管理软链接" : "关联后由 Adaptive Skills 管理更新"} onClick={() => adoptExternal(entry, match)}><Link2 size={13} />{busy === "adopt" ? "正在迁移…" : entry.migration_mode === "backup-and-link" ? "迁移为受管理软链接" : "关联并纳管"}</button></div>)}</div></div>)}</div> : <div className="history-empty"><ShieldCheck size={20} /><span>没有未纳管的外部 Skill。</span></div>}
+          </section>
+        )}
+
+        {status && (
+          <ProjectProfilesPanel
+            profiles={profiles}
+            selectedProfileId={selectedProfileId}
+            preview={profilePreview}
+            importPreview={profileImportPreview}
+            transferMessage={profileTransferMessage}
+            status={status}
+            captureName={captureName}
+            busy={busy}
+            onSelect={selectProfile}
+            onPreview={previewProfile}
+            onApply={applyProfile}
+            onDelete={deleteProfile}
+            onExport={() => void exportProfile()}
+            onImportChoose={() => void chooseProfileImport()}
+            onImportConfirm={importProfile}
+            onImportDismiss={() => setProfileImportPreview(null)}
+            onCaptureName={setCaptureName}
+            onCapture={captureProfile}
+          />
+        )}
+
         {project.trim() && (
           <section className="panel project-history-panel">
             <div className="panel-heading"><div><span className="eyebrow">Project activity</span><h3>操作历史</h3></div><button className="text-button" disabled={historyLoading || Boolean(busy)} onClick={() => void loadProjectContext(project, true)}><RefreshCw className={historyLoading ? "spin" : ""} size={14} />刷新</button></div>
-            {history.length ? <div className="project-history-list">{history.map((event) => <div className="project-history-row" key={event.id}><div className={`history-icon action-${event.action}`}><History size={14} /></div><div><strong>{projectHistoryLabel(event)}</strong><span>{event.skill_names?.join("、") || "没有需要变更的 Skill"}</span>{event.requirement && <small>{event.requirement}</small>}</div><time>{formatDate(event.created_at)}</time></div>)}</div> : <div className="history-empty"><History size={20} /><span>{historyLoading ? "正在读取历史…" : "还没有成功的应用、同步或移除记录。"}</span></div>}
+            {history.length ? <div className="project-history-list">{history.map((event) => <div className="project-history-row" key={event.id}><div className={`history-icon action-${event.action}`}><History size={14} /></div><div><strong>{projectHistoryLabel(event)}</strong><span>{event.skill_names?.join("、") || "没有需要变更的 Skill"}</span>{event.requirement && <small>{event.requirement}</small>}</div><time>{formatDate(event.created_at)}</time></div>)}</div> : <div className="history-empty"><History size={20} /><span>{historyLoading ? "正在读取历史…" : "还没有成功的应用、关联、同步或移除记录。"}</span></div>}
           </section>
         )}
       </section>
@@ -1646,8 +2380,29 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
 }
 
 function ActivityToast({ label }: { label: string }) {
-  const messages: Record<string, string> = { "source-add": "正在 Clone、扫描并建立评测队列…", "source-reconcile": "正在发现并扫描手动加入的 Git 仓库…", "refresh-all": "正在逐个更新并扫描全部来源…", "llm-config": "正在保存本地模型配置…", "llm-errors-clear": "正在清空失败评测记录…", plan: "正在匹配项目需求…", apply: "正在创建项目软链接…", sync: "正在同步项目链接…", unlink: "正在安全移除链接…" };
-  const message = messages[label] || (label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
+  const messages: Record<string, string> = {
+    "source-add": "正在 Clone、扫描并建立评测队列…",
+    "source-reconcile": "正在发现并扫描手动加入的 Git 仓库…",
+    "refresh-all": "正在逐个更新并扫描全部来源…",
+    "llm-config": "正在保存本地模型配置…",
+    "llm-errors-clear": "正在清空失败评测记录…",
+    "matrix-load": "正在读取各 Agent 的 Skill 安装状态…",
+    "matrix-install": "正在为 Agent 安装受管 Skill 软链接…",
+    "matrix-uninstall": "正在安全卸载 Agent 的受管 Skill…",
+    "matrix-adopt": "正在将外部 Skill 关联为受管软链接…",
+    "profile-preview": "正在解析配置集与目标 Agent 的兼容性…",
+    "profile-apply": "正在应用 Skill 配置集…",
+    "profile-capture": "正在保存当前 Skill 组合…",
+    "profile-delete": "正在删除配置集…",
+    "profile-export": "正在导出可移植配置集…",
+    "profile-import-preview": "正在验证配置集文件…",
+    "profile-import": "正在保存配置集元数据…",
+    plan: "正在匹配项目需求…",
+    apply: "正在创建项目软链接…",
+    sync: "正在同步项目链接…",
+    unlink: "正在安全移除链接…",
+  };
+  const message = messages[label] || (label.startsWith("source-remove-preview-") ? "正在检查来源和受管引用…" : label.startsWith("source-remove-") ? "正在清理受管引用并移除来源…" : label.startsWith("source-restore-") ? "正在恢复并重新扫描来源…" : label.startsWith("audit-review-") ? "正在保存风险审查结论并重算等级…" : label.startsWith("evaluate-") ? "正在调用模型生成分类与评分提案…" : label.startsWith("evaluation-apply-") ? "正在应用评测提案…" : label.startsWith("evaluation-reject-") ? "正在拒绝评测提案…" : label.startsWith("update-") ? "正在更新并重新扫描来源…" : label.startsWith("scan-") ? "正在重新扫描来源…" : "正在执行本地操作…");
   return <div className="activity-toast"><LoaderCircle className="spin" size={17} /><span>{message}</span></div>;
 }
 

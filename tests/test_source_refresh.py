@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
 
 from adaptive_skills.catalog import Catalog
 from adaptive_skills.config import Settings
 from adaptive_skills.errors import ConflictError, ValidationError
 from adaptive_skills.source_refresh import SourceRefreshService
+from adaptive_skills.source_removal import SourceRemovalService
+from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.sources import SourceManager
 
 from tests.helpers import commit_all, init_repo, write_skill
@@ -15,6 +18,42 @@ from tests.test_cli import run_cli
 
 
 class SourceRefreshServiceTests(unittest.TestCase):
+    def test_reconcile_explains_reused_removed_path_then_accepts_it_after_forget(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            library = Path(raw) / "library"
+            original = init_repo(library / "shared")
+            write_skill(original, "old-skill", "Old repository.")
+            commit_all(original, "old")
+            settings = Settings.load(library)
+            manager = SourceManager(settings)
+            source = manager.register(original)
+            CatalogScanner(settings).scan(source["id"])
+            removal_service = SourceRemovalService(settings)
+            removal = removal_service.preview(source["id"])
+            removal_service.remove(
+                source["id"],
+                cleanup_references=True,
+                expected_digest=removal["preview_digest"],
+            )
+            shutil.rmtree(original)
+            replacement = init_repo(library / "shared")
+            write_skill(replacement, "new-skill", "Different repository.")
+            commit_all(replacement, "new")
+
+            blocked = SourceRefreshService(settings).reconcile()
+
+            self.assertEqual(blocked["discovered"], 0)
+            self.assertEqual(blocked["failed"], 1)
+            self.assertIn("permanently forget", blocked["results"][0]["error"])
+            forget = removal_service.preview_forget(source["id"])
+            removal_service.forget(
+                source["id"], expected_digest=forget["preview_digest"]
+            )
+            accepted = SourceRefreshService(settings).reconcile()
+            self.assertEqual(accepted["discovered"], 1)
+            self.assertEqual(accepted["failed"], 0)
+            self.assertEqual(accepted["results"][0]["source"], "shared")
+
     def test_reconcile_discovers_and_scans_manually_cloned_sources(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             library = Path(raw) / "library"

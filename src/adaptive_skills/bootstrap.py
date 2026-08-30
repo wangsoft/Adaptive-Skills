@@ -7,9 +7,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
+from .agent_scopes import default_agent_roots
 from .config import Settings
 from .database import Database, path_is_within
 from .errors import ValidationError
+from .provider_skills import provider_skill_info
 from .scanner import (
     PRUNED_DIRECTORIES,
     CatalogScanner,
@@ -157,21 +159,7 @@ class BootstrapService:
 
     @staticmethod
     def default_roots() -> list[dict[str, Any]]:
-        home = Path.home()
-        values = (
-            ("agents", "通用 Agents", home / ".agents" / "skills"),
-            ("claude", "Claude Code", home / ".claude" / "skills"),
-            ("codex", "Codex", home / ".codex" / "skills"),
-        )
-        return [
-            {
-                "id": identifier,
-                "label": label,
-                "path": str(path),
-                "exists": path.is_dir(),
-            }
-            for identifier, label, path in values
-        ]
+        return default_agent_roots()
 
     def status(self) -> dict[str, Any]:
         known = self.sources.list()
@@ -244,12 +232,20 @@ class BootstrapService:
                     except ValueError:
                         relative_parts = lexical_path.parts
                     system = ".system" in relative_parts
+                    provider = (
+                        None
+                        if system
+                        else provider_skill_info(lexical_root, lexical_path)
+                    )
                     managed = path_is_within(real_path, self.settings.library)
                     git_root, git_url = _git_metadata(real_path)
                     duplicate_of = existing_hashes.get(tree_hash) or seen_hashes.get(
                         tree_hash
                     )
-                    if managed:
+                    if provider is not None:
+                        kind = "provider"
+                        reason = provider["reason"]
+                    elif managed:
                         kind = "managed"
                         reason = "Skill 已位于当前仓库中"
                     elif system:
@@ -264,7 +260,9 @@ class BootstrapService:
                     else:
                         kind = "local"
                         reason = "可安全复制到本地归集来源"
-                    importable = not (managed or system or symlinked or duplicate_of)
+                    importable = not (
+                        managed or system or provider or symlinked or duplicate_of
+                    )
                     if duplicate_of:
                         reason = f"内容与 {duplicate_of} 重复"
                     candidate_id = _candidate_id(display_path, tree_hash)
@@ -280,6 +278,8 @@ class BootstrapService:
                         "file_count": file_count,
                         "git_root": git_root,
                         "git_url": git_url,
+                        "provider": provider["provider"] if provider else None,
+                        "protected_reason": provider["reason"] if provider else None,
                         "duplicate_of": duplicate_of,
                         "importable": bool(importable),
                         "reason": reason,

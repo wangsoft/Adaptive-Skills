@@ -15,7 +15,7 @@ dependencies = ["keyring>=25,<26", "PyYAML>=6,<7"]
 [project.optional-dependencies]
 excel = ["openpyxl>=3.1,<4"]
 dev = ["openpyxl>=3.1,<4"]
-desktop = ["openpyxl>=3.1,<4", "pyinstaller>=6.21,<7"]
+desktop = ["pyinstaller>=6.21,<7"]
 
 [project.scripts]
 adaptive-skills = "adaptive_skills.cli:main"

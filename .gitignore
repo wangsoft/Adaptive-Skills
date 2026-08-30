@@ -10,6 +10,7 @@ build/
 *.db-shm
 *.db-wal
 .DS_Store
+.idea/
 node_modules/
 app/src-tauri/target/
 app/src-tauri/binaries/
@@ -26,3 +27,5 @@ app/src-tauri/icons/icon.ico
 # Adaptive Workloop evidence is local execution state.
 .workloop/local/
 .gstack/
+.impeccable/
+graphify-out/

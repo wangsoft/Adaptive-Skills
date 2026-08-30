@@ -1,406 +1,65 @@
-# Adaptive Skills
+<p align="center">
+  <img src="app/src-tauri/app-icon.svg" width="96" alt="Adaptive Skills logo">
+</p>
 
-Adaptive Skills 是一个本地优先的 Agent Skills 管理器。它把分散在多个 Git 仓库中的
-`SKILL.md` 扫描成可检索目录，并只把当前项目需要的 Skill 引用到项目内，避免把整套
-Skill 库加载到全局环境。
+<h1 align="center">Adaptive Skills</h1>
 
-当前版本包含可运行的 Python 核心和 macOS 优先的 Tauri 本地 App。核心能力使用 Python
-标准库和系统凭据库实现；只有 Excel 导入导出需要可选的 `openpyxl` 依赖。App 通过版本化 JSON 契约
-调用同一套核心，不直接查询 SQLite，也不在 TypeScript 或 Rust 中复制安全规则。
+<p align="center">
+  Local-first Skill management for coding agents.<br>
+  面向 Coding Agent 的本地优先 Skill 管理器。
+</p>
 
-## 核心原则
+<p align="center"><a href="#中文">中文</a> · <a href="#english">English</a></p>
 
-- SQLite 是运行时事实来源，Excel 只作为可选的兼容导入导出与报表界面。
-- Skill ID 由“来源 UUID + 仓库内相对路径”生成，不依赖名称、排序或 Excel 行号。
-- 下载的仓库视为不可信输入：系统解析和静态审计文件，但绝不执行其中的脚本。
-- 项目引用由 `.adaptive-skills/manifest.json` 管理；未登记的目录或文件永不覆盖。
-- 默认写入 `.agents/skills`，也支持 Claude 的 `.claude/skills`。
-- 优先创建软链接；不支持软链接的环境可自动回退为复制。
+## 中文
 
-## 架构
+### 技能管理理念
 
-```mermaid
-flowchart LR
-    G["Git sources"] --> S["Scanner + validator + static audit"]
-    S --> D["SQLite catalog + FTS5"]
-    X["Excel annotations"] <--> B["Optional Excel bridge"]
-    B <--> D
-    D --> Q["Explained requirement search"]
-    Q --> P["Project plan/apply"]
-    P --> M["Project manifest"]
-    M --> L[".agents/skills or .claude/skills"]
-```
+Skill 不应该全部塞进全局上下文。Adaptive Skills 把 `~/skills` 作为本地受管仓库：统一收集、扫描和评测 Skill，再按项目或 Agent 的实际需求建立软链接。来源始终可追踪，项目只加载需要的能力，已有文件默认不会被覆盖。
 
-模块职责：
+### 核心能力
 
-- `sources.py`：克隆、登记、发现和快进更新 Git 来源。
-- `bootstrap.py`：只读发现本机 Skill 目录、安全复制归集和显式安装起步 Git 来源。
-- `scanner.py`：发现 `SKILL.md`，解析 frontmatter，校验 Agent Skills 约束，计算哈希并做静态安全审计。
-- `database.py`：SQLite schema、FTS5 索引、来源/Skill/标注/扫描记录和项目索引。
-- `catalog.py`：稳定 ID 查询、人工标注、中文与英文混合的可解释排序。
-- `projects.py`：项目级 plan/apply/status/sync/unlink、项目索引和 manifest 安全边界。
-- `evaluation.py`：Codex/Claude CLI 与 OpenAI-compatible API 的显式评测和提案审核。
-- `inventory.py`：兼容现有工作簿的可选导入导出层。
+- 管理多个 Git 来源，支持发现、Clone、批量更新、本地维护和安全移除。
+- 扫描 `SKILL.md`、YAML frontmatter、格式兼容性及风险信号。
+- 使用 SQLite 建立可检索目录，并通过 Codex CLI、Claude Code 或 OpenAI-compatible API 进行智能分类与评分。
+- 按需求或固定分类推荐 Skill，解释匹配原因、质量与风险。
+- 为普通项目和 Agent 全局目录创建受管理软链接；实体副本可备份后迁移为软链接。
+- 记录来源更新、LLM 评测和项目变更历史。
 
-## 安装
+### 界面
 
-需要 Python 3.12+ 和 Git。推荐使用 `uv`：
+**目录概览** — 查看 Skill 数量、来源状态、有效率与风险分布。
 
-```bash
-uv venv
-uv pip install -e .
-```
+![Adaptive Skills overview](docs/images/overview.png)
 
-需要 Excel 功能时：
+**Git 来源** — 集中管理仓库生命周期、更新策略与批量拉取结果。
 
-```bash
-uv pip install -e '.[excel]'
-```
+![Adaptive Skills sources](docs/images/sources.png)
 
-不安装包也可以在仓库中用 `PYTHONPATH=src python3 -m adaptive_skills ...` 运行。
+## English
 
-## 首次初始化本地仓库
+### Skill management philosophy
 
-桌面 App 在空仓库第一次启动时会自动打开“初始化”工作台，之后也可以从左侧菜单随时进入。
-它默认扫描 `~/.agents/skills`、`~/.claude/skills` 和 `~/.codex/skills`，也允许手动增加目录。
-发现阶段只读；用户审核并确认后，系统才把 Skill **复制**到当前库的
-`local-imports/` 来源。原目录不会被移动、删除、重命名或改写。
+Skills should not all live in global context. Adaptive Skills treats `~/skills` as a local managed library: collect, scan, and evaluate once, then symlink only the capabilities a project or agent actually needs. Provenance stays visible and existing files are preserved by default.
 
-安全边界：
+### Capabilities
 
-- 系统内置 Skill、软链接目标、已在当前仓库中的 Skill 和内容重复项只展示，不自动导入；
-- 导入前后用内容哈希防止“审核后源码变化”，拒绝包含软链接、目标冲突或超限的目录树；
-- 本地导入只建立 `local-imports` 来源并扫描进 SQLite，不会自动调用 LLM；
-- 起步 Git 来源只有在用户勾选并确认网络操作后才 Clone，下载内容仍按不可信输入静态扫描。
+- Discover, clone, update, preserve, and safely remove multiple Git sources.
+- Parse `SKILL.md` and YAML frontmatter; separate compatibility issues from confirmed risks.
+- Store the live catalog in SQLite and evaluate with Codex CLI, Claude Code, or an OpenAI-compatible API.
+- Recommend by requirement or taxonomy with match, quality, and risk explanations.
+- Manage project-scoped and agent-global symlinks, including backup-first migration of external copies.
+- Keep source, evaluation, and project operation history.
 
-命令行可以执行同一流程：
+## Run locally / 本地运行
+
+Requires Python 3.12+, Node.js, Rust, and Git.
 
 ```bash
-adaptive-skills --library /Users/leowang/skills bootstrap status
-adaptive-skills --library /Users/leowang/skills bootstrap discover
-adaptive-skills --library /Users/leowang/skills bootstrap discover --root /path/to/more-skills
-adaptive-skills --library /Users/leowang/skills bootstrap install --starter openai-plugins
-```
-
-`bootstrap discover` 的返回值包含每个候选的 `path` 和 `tree_hash`。CLI 导入需要把审核过的
-二者作为 JSON 传给 `bootstrap import --candidate`；批量审核和导入更推荐使用桌面工作台。
-内置起步清单目前包括 OpenAI Plugins、Anthropic Agent Skills 和 Superpowers；清单只是入口，
-不会在后台搜索 GitHub 或自动下载。
-
-## 从现有 Skill 库开始
-
-以下流程不会修改已有仓库或原始 Excel；它只在 Skill 库内新增
-`.adaptive-skills/catalog.db`。
-
-```bash
-adaptive-skills --library /Users/leowang/skills init
-adaptive-skills --library /Users/leowang/skills source discover
-adaptive-skills --library /Users/leowang/skills scan
-adaptive-skills --library /Users/leowang/skills inventory import-xlsx \
-  /Users/leowang/skills/skills-inventory.xlsx
-```
-
-`source discover` 只登记 Skill 库第一层中的 Git 仓库。若是直接在 Skills 根目录执行了
-`git clone`，可以用一个命令完成发现和扫描：
-
-```bash
-adaptive-skills --library /Users/leowang/skills source reconcile
-```
-
-桌面 App 启动和右上角刷新时会自动执行相同的本地检查；来源页的“发现本地仓库”可随时手动
-触发并显示新增、已扫描和失败数量。该流程不拉取网络，也不执行仓库代码。非 Git 的普通
-Skill 文件夹仍通过“初始化”页面审核并复制归集，避免误把缓存、项目目录或 vendor 目录当成来源。
-
-也可以显式增加或登记来源：
-
-```bash
-adaptive-skills --library /Users/leowang/skills source add \
-  https://github.com/example/skills.git --name example-skills --ref main
-
-adaptive-skills --library /Users/leowang/skills source register \
-  /Users/leowang/skills/existing-repository
-```
-
-来源更新只接受 fast-forward，并在工作区有未提交变化时拒绝操作：
-
-```bash
-adaptive-skills --library /Users/leowang/skills source update example-skills
-adaptive-skills --library /Users/leowang/skills scan example-skills
-```
-
-一次更新并重新扫描全部来源：
-
-```bash
-adaptive-skills --library /Users/leowang/skills source refresh-all
-```
-
-批量命令会逐个执行安全更新；单个仓库失败不会中断其余仓库，结果会分别汇总已更新、
-无变化和失败的来源。
-
-对于需要长期保留本地模板或配置的仓库，可以切换为“本地维护”：
-
-```bash
-adaptive-skills --library /Users/leowang/skills source policy SOURCE_ID local
-```
-
-本地维护来源在“全部更新”时不会执行 `git pull`，而是保留当前工作区并重新扫描，结果单独
-计入“本地保留”。切回远程跟随使用 `source policy SOURCE_ID remote`；切回后仍必须先处理
-未提交内容，系统不会自动覆盖或合并。桌面 App 的每张来源卡片也提供相同的策略切换。
-
-macOS 默认文件系统不区分文件名大小写。如果上游同时跟踪 `LICENSE.txt` 和
-`license.txt`，Git 可能在没有人工修改时仍显示 dirty。这属于仓库与文件系统的兼容性
-冲突，不应直接丢弃文件；可以在确认内容后对不需要展开的那个路径使用 Git 的
-`skip-worktree`，或把仓库迁移到大小写敏感的卷。Adaptive Skills 仍保留 dirty 保护，
-不会把这种兼容性冲突误当成可安全覆盖的普通修改。
-
-## 检索和项目引用
-
-先根据需求查看推荐及命中原因，不修改项目：
-
-```bash
-adaptive-skills --library /Users/leowang/skills project plan \
-  /path/to/project \
-  --requirement '根据技术方案制作结构清晰的中文演示文稿'
-```
-
-确认结果中的稳定 `id` 后应用：
-
-```bash
-adaptive-skills --library /Users/leowang/skills project apply \
-  /path/to/project \
-  --skill 00000000-0000-0000-0000-000000000000 \
-  --requirement '根据技术方案制作结构清晰的中文演示文稿'
-```
-
-默认目标是 `.agents/skills`。使用 `--target claude` 可改为 `.claude/skills`；
-使用 `--mode copy` 可强制复制。高风险或严重风险 Skill 默认不能检索或应用，只有在人工
-检查后显式传入 `--allow-risk` 才能越过这道门。
-
-检查、同步和移除项目引用：
-
-```bash
-adaptive-skills --library /Users/leowang/skills project status /path/to/project
-adaptive-skills --library /Users/leowang/skills project sync /path/to/project
-adaptive-skills --library /Users/leowang/skills project unlink /path/to/project --skill SKILL_ID
-```
-
-首次成功应用后，项目会自动进入当前 Skill 库的项目索引。索引只用于桌面入口和移动检测，
-项目 manifest 仍是权威记录：
-
-```bash
-adaptive-skills --library /Users/leowang/skills project list
-adaptive-skills --library /Users/leowang/skills project register /path/to/existing-project
-adaptive-skills --library /Users/leowang/skills project relink PROJECT_ID /new/path
-adaptive-skills --library /Users/leowang/skills project forget PROJECT_ID
-```
-
-`forget` 只删除本地索引行，不删除项目目录、软链接或 manifest。项目移动后会显示为 missing，
-确认新目录中的 manifest 有效后才能 relink。
-
-成功的应用、同步和移除操作会追加到项目自己的
-`.adaptive-skills/manifest.json`，最多保留最近 100 条。查看记录：
-
-```bash
-adaptive-skills --library /Users/leowang/skills project history /path/to/project
-```
-
-桌面 App 的项目菜单先展示管理过的项目和状态，再进入单个项目查看同一份历史。项目目录、需求、目标 Agent 和风险开关，以及尚未提交
-的 Git 来源添加表单，会按当前 Skill 库保存在本机 App 草稿中；切换菜单或重启 App 后可
-恢复。项目页的“清空草稿”和来源表单的“取消并清空”可以显式删除这些本地草稿。
-
-manifest 记录来源 URL、ref、commit、仓库内路径、内容哈希、安装方式和原始需求。建议提交
-`.adaptive-skills/manifest.json`，并根据团队策略忽略项目中的实际软链接目录，因为软链接
-目标通常包含本机绝对路径。
-
-安全行为：
-
-- 目标目录已有未受 manifest 管理的内容时，`apply` 失败。
-- 复制内容被项目修改后，`sync` 和 `unlink` 默认失败；显式 `--force` 才会覆盖或移除。
-- 软链接目标被替换后，默认不会删除替代内容。
-- manifest 中出现绝对路径或 `..` 逃逸时，所有项目操作失败。
-- 多 Skill 应用中途失败时，本次新建的条目会回滚。
-
-## 本地桌面 App
-
-桌面端位于 `app/`，采用 Tauri 2、React 和 TypeScript。当前可以：
-
-- 查看真实目录概览、来源状态、有效性和风险分布；
-- 首次使用时扫描常用目录、审核候选并安全复制归集，也可显式安装起步 Git 来源；
-- 按来源、分类和风险筛选 Skill，查看 `SKILL.md`、AI 整理与静态审计；
-- 根据项目需求生成推荐，显式选择后创建 manifest 管理的软链接；
-- 检查项目链接状态、同步来源漂移和安全移除链接；
-- 从历史项目列表进入详情、导入已有 manifest，并重新定位移动后的项目；
-- 添加 Git 来源，以及一键对全部来源执行 fast-forward 更新和重新扫描。
-
-开发运行前，先按上文安装 Python 项目，然后安装前端依赖：
-
-```bash
+uv sync --extra desktop
 cd app
-npm install
+npm ci
 npm run tauri -- dev
 ```
 
-开发模式默认使用仓库根目录的 `.venv/bin/python`。需要指定其他解释器时：
-
-```bash
-ADAPTIVE_SKILLS_PYTHON=/absolute/path/to/python npm run tauri -- dev
-```
-
-发布构建会先用 PyInstaller 生成独立的 Python 核心目录，再由 Tauri 把完整运行时放入 App 资源。
-安装 DMG 的用户不需要另装 Python、项目源码或 `.venv`：
-
-```bash
-uv pip install --python .venv/bin/python -e '.[desktop]'
-cd app
-npm run tauri -- build
-```
-
-前端与 Rust 桥接验证：
-
-```bash
-cd app
-npm run test -- --run
-npm run build
-cd ..
-cargo test --manifest-path app/src-tauri/Cargo.toml
-```
-
-App 的 Rust 层以参数数组启动内置核心，不经过 Shell；只有开发模式才调用项目 Python。高风险或严重风险 Skill 默认不会进入
-项目推荐；启用风险结果后，应用界面还会要求二次确认。所有实际文件变更仍由
-`ProjectManager` 的目录边界、冲突检测和 manifest 规则控制。
-
-## 可选 LLM 分类与质量评测
-
-新 Clone 的来源会自动扫描并进入待评测队列，但不会在后台静默调用模型。桌面 App 的
-“LLM 评测”页面支持多个连接配置：本机已经登录的 Codex CLI、Claude Code，以及
-Responses API 或 Chat Completions 形态的 OpenAI-compatible 服务。配置文件只保存连接元数据；
-API Key 写入操作系统凭据库，不进入 JSON、SQLite、命令参数或评测记录。只有用户点击
-“开始评测”或“测试连接”后才会访问模型服务。
-
-从 Finder 启动的 macOS App 不依赖终端的 `PATH`：核心会在 NVM、FNM、Volta、asdf、mise、
-Homebrew 等常见目录中发现 Codex/Claude CLI，并把解析到的路径显示在连接卡片中。特殊安装
-位置可以通过 `ADAPTIVE_SKILLS_CODEX_EXECUTABLE` 或
-`ADAPTIVE_SKILLS_CLAUDE_EXECUTABLE` 指定绝对路径。无法发现 CLI 时，界面会暂停评测按钮；
-每次评测完成后会显示处理、进入审核、评分未变化、提醒和失败数量。已经有智能评分的 Skill
-重新评测后，分数相同的结果只记入 SQLite，不再进入审核列表；分数变化时会展示原分数、
-新分数和差值。新 Skill 与现有 Skill 同名时会列出冲突来源。
-“清空失败记录”只删除失败结果，不会影响待审核提案、已应用结果或待评测队列。
-
-命令行配置和查看状态：
-
-```bash
-adaptive-skills --library /Users/leowang/skills llm config set \
-  --provider codex --max-per-run 20
-adaptive-skills --library /Users/leowang/skills llm status
-adaptive-skills --library /Users/leowang/skills llm pending --source SOURCE_ID
-adaptive-skills --library /Users/leowang/skills llm clear-errors
-```
-
-增加一个 OpenAI-compatible 连接时，密钥只能通过桌面 App 的密码框，或一次性进程环境变量
-传给 CLI；命令本身没有 `--api-key` 参数：
-
-```bash
-ADAPTIVE_SKILLS_LLM_PROFILE_SECRET='YOUR_KEY' \
-adaptive-skills --library /Users/leowang/skills llm profile save \
-  --id openai-main --name 'OpenAI main' \
-  --provider openai-compatible --model MODEL \
-  --base-url https://api.openai.com/v1 --api-mode responses
-
-adaptive-skills --library /Users/leowang/skills llm profile list
-adaptive-skills --library /Users/leowang/skills llm profile activate openai-main
-```
-
-远程 API 强制 HTTPS；只有 `localhost`、`127.0.0.1` 和 `::1` 可以使用 HTTP。网络响应有
-大小和超时限制，重定向默认拒绝。OpenAI 官方端点的 `auto` 模式使用 Responses API，其他
-兼容端点默认使用 Chat Completions；遇到兼容性差异时应显式选择模式。
-
-显式评测一个来源，并审核产生的提案：
-
-```bash
-adaptive-skills --library /Users/leowang/skills llm evaluate --source SOURCE_ID
-adaptive-skills --library /Users/leowang/skills llm list --status proposed
-adaptive-skills --library /Users/leowang/skills llm apply EVALUATION_ID
-```
-
-LLM 在无工具、无会话持久化的结构化输出模式中运行。下载的 `SKILL.md` 始终作为不可信数据，
-不会执行其中脚本或命令。评测先写入独立 proposal；Skill Arena 或人工标注已存在时，默认
-拒绝覆盖，只有显式使用 `--replace-existing` 才能替换。
-
-分类采用混合治理：15 个一级分类属于版本化公共主干；二级分类优先复用当前库中至少重复
-出现的受控词表，无法归类时模型只能提出“新二级分类候选”；个性化用途通过自由标签表达。
-质量评分由七个 0–10 维度按固定权重计算，最终仍为 0–10，而不是让模型直接给一个不可审计
-的总分。每条结果记录 profile、provider、model、prompt、taxonomy 和 Skill 内容哈希，内容变化后旧
-评测不会被误用。
-
-模型只读取本次待评测的 Skill，并输出简短的能力指纹；名称冲突、能力覆盖和评分强弱比较
-全部在本机 SQLite/Python 中完成，不会为了去重把其他 Skill 的正文额外发送给模型。如果现有
-有效、低风险且已评分的 Skill 完整覆盖新 Skill 的全部能力指纹，并且评分严格更高，审核卡会
-给出“建议忽略此 Skill”，同时持久化匹配对象、覆盖能力、评分和建议。该建议不会自动停用、
-删除或隐藏 Skill，最终取舍仍由用户确认。
-
-项目推荐列表里的“匹配”是用于排序的需求相关度，可以高于 10；它不是 Skill
-质量分。人工或 LLM 评测产生的“质量分”始终限定在 0–10，并在界面中显式标记
-`/10`。
-
-## Excel 工作流
-
-导入匹配顺序是：`Skill ID` → 绝对/相对路径 → 唯一技能名。无法匹配或存在歧义的行会
-在 JSON 结果中列出，不会按扫描序号猜测。当前工作簿中的这些列会映射到 annotations：
-
-- `评分`、`评分来源`
-- `一级分类`、`细分类`（也接受 `二级分类`）
-- `解决的问题`、`应用场景`
-- `备注 / 注意事项`（也接受 `备注`）
-- `标签`
-
-导出时可以复用原工作簿作为模板：
-
-```bash
-adaptive-skills --library /Users/leowang/skills inventory export \
-  --template /Users/leowang/skills/skills-inventory.xlsx \
-  --output /Users/leowang/skills/skills-inventory.updated.xlsx
-```
-
-系统保留模板中的其他 sheet，重建 `技能总表` 并新增或重建 `Sources`。来自不可信仓库且
-以 `=`, `+`, `-`, `@` 开头的文本会被转义，避免成为 Excel 公式。MVP 不保证无损保留被
-重建 sheet 的原有样式、图表、批注或宏，因此默认应导出到新文件再人工核对。
-
-## 数据和信任边界
-
-运行时状态位于 `<library>/.adaptive-skills/`：
-
-- `catalog.db`：来源、Skill 元数据、annotations、评测差异与去重建议、扫描记录和 FTS5 索引。
-- Skill 仓库仍保留在各自 Git 工作区；数据库可以随时重新扫描重建。
-- 人工 annotations 通过稳定 ID 与 Skill 关联，重新扫描不会丢失。
-
-静态审计目前检查远程脚本管道、危险的广域删除、敏感凭据路径、混淆执行、提示词覆盖
-和全局 Git 配置等高信号模式。它是风险筛选器，不是完整的恶意代码证明；引入外部 Skill
-前仍需要人工审查许可证、脚本和依赖。
-
-## MVP 限制
-
-- frontmatter 使用安全配置的 PyYAML 解析，支持嵌套 YAML，并限制递归别名和复杂度。
-- 项目需求检索仍是确定性的词法排序加智能评分；可选 LLM 只负责 Skill 分类和质量评测，
-  暂不参与项目需求匹配，也不包含向量数据库。
-- macOS 桌面包已包含独立 Python 核心运行时；当前产物仍未使用 Apple Developer ID 签名或公证。
-- 当前发布包只构建 Apple Silicon；Intel Mac、Windows 和 Linux 需要在对应平台原生构建 sidecar。
-- 暂无 TUI、MCP 服务、自动更新调度和远程团队目录。
-- 来源更新面向普通分支；复杂 tag/SHA pin 和依赖锁定留待后续版本。
-- Windows 的软链接权限不足时使用 `--mode auto` 回退为复制，尚未在 Windows CI 验证。
-
-## 开发和验证
-
-核心测试不依赖第三方包：
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
-
-安装 Excel extra 后会额外运行工作簿迁移测试：
-
-```bash
-uv run --extra excel python -m unittest tests.test_inventory -v
-```
-
-测试使用临时 Git 仓库、临时 Skill 库和临时项目，覆盖稳定 ID、校验、风险拦截、中文检索、
-软链接生命周期、复制漂移、目录冲突、manifest 路径逃逸和 Excel 公式注入防护。
+Stack: Python · SQLite · PyYAML · React · TypeScript · Tauri. [Product](docs/PRODUCT.md) · [Design](docs/DESIGN.md) · [MIT License](LICENSE).

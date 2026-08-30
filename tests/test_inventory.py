@@ -12,6 +12,7 @@ from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.sources import SourceManager
 
 from tests.helpers import commit_all, init_repo, write_skill
+from tests.test_cli import run_cli
 
 
 @unittest.skipUnless(
@@ -87,3 +88,10 @@ class InventoryTests(unittest.TestCase):
             self.assertGreaterEqual(len(exported["技能总表"].conditional_formatting), 3)
             self.assertEqual(exported["技能总表"]["B2"].number_format, "0.0")
             exported.close()
+
+            cli_output = root / "cli-export.xlsx"
+            cli_export = run_cli(
+                library, "inventory", "export", "--output", str(cli_output)
+            )
+            self.assertEqual(cli_export["output"], str(cli_output.resolve()))
+            self.assertTrue(cli_output.is_file())

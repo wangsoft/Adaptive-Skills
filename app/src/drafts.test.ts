@@ -32,6 +32,9 @@ describe("navigation-safe form drafts", () => {
     saveProjectDraft(storage, "/library/a", {
       project: "/project/demo",
       requirement: "制作技术方案",
+      discoveryMode: "category",
+      categoryL1: "演示与文档",
+      categoryL2: "演示文稿",
       target: "claude",
       allowRisk: true,
     });
@@ -39,6 +42,9 @@ describe("navigation-safe form drafts", () => {
     expect(loadProjectDraft(storage, "/library/a")).toEqual({
       project: "/project/demo",
       requirement: "制作技术方案",
+      discoveryMode: "category",
+      categoryL1: "演示与文档",
+      categoryL2: "演示文稿",
       target: "claude",
       allowRisk: true,
     });
@@ -49,6 +55,7 @@ describe("navigation-safe form drafts", () => {
     const storage = new MemoryStorage();
     storage.setItem("adaptive-skills:project-draft:/library", "not-json");
     expect(loadProjectDraft(storage, "/library").target).toBe("auto");
+    expect(loadProjectDraft(storage, "/library").discoveryMode).toBe("requirement");
   });
 
   it("restores and clears an in-progress source form", () => {

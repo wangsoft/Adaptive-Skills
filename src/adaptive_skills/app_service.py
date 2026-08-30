@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .catalog import Catalog
@@ -8,9 +9,10 @@ from .config import Settings
 from .database import Database, utc_now
 from .errors import ValidationError
 from .evaluation import EvaluationService
+from .source_removal import SourceRemovalService
 
 
-APP_CONTRACT_VERSION = 6
+APP_CONTRACT_VERSION = 8
 RISK_LEVELS = ("none", "low", "medium", "high", "critical")
 
 
@@ -28,6 +30,7 @@ class AppService:
         self.catalog = Catalog(settings, self.database)
         self.evaluations = EvaluationService(settings, self.database)
         self.bootstrap = BootstrapService(settings, self.database)
+        self.source_removal = SourceRemovalService(settings, self.database)
 
     def snapshot(
         self, *, query: str | None = None, limit: int = 500
@@ -65,6 +68,7 @@ class AppService:
             },
             "summary": summary,
             "sources": sources,
+            "removed_sources": self.source_removal.list_removed(),
             "skills": skills,
             "filters": filters,
             "llm": {
@@ -78,12 +82,15 @@ class AppService:
                 "source_update": True,
                 "source_scan": True,
                 "source_policy": True,
+                "source_remove": True,
+                "source_restore": True,
+                "source_forget": True,
                 "project_plan": True,
                 "project_apply": True,
                 "project_sync": True,
                 "project_unlink": True,
-                "inventory_import": True,
-                "inventory_export": True,
+                "inventory_import": False,
+                "inventory_export": False,
                 "llm_config": True,
                 "llm_profiles": True,
                 "llm_evaluate": True,
@@ -99,7 +106,7 @@ class AppService:
         counts = connection.execute(
             """
             SELECT
-                (SELECT count(*) FROM sources) AS source_count,
+                (SELECT count(*) FROM sources WHERE status != 'removed') AS source_count,
                 count(*) AS skill_count,
                 sum(CASE WHEN valid = 1 THEN 1 ELSE 0 END) AS valid_count,
                 sum(CASE WHEN valid = 0 THEN 1 ELSE 0 END) AS invalid_count,
@@ -127,9 +134,8 @@ class AppService:
             "risk_counts": risk_counts,
         }
 
-    @staticmethod
     def _sources(
-        connection: Any, pending_counts: dict[str, int]
+        self, connection: Any, pending_counts: dict[str, int]
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
@@ -140,21 +146,30 @@ class AppService:
                    sum(CASE WHEN s.audit_severity IN ('high', 'critical') THEN 1 ELSE 0 END) AS elevated_risk_count
             FROM sources src
             LEFT JOIN skills s ON s.source_id = src.id AND s.active = 1
+            WHERE src.status != 'removed'
             GROUP BY src.id
             ORDER BY src.name
             """
         ).fetchall()
-        return [
-            {
+        results: list[dict[str, Any]] = []
+        sources_root = self.settings.sources_dir.resolve()
+        for row in rows:
+            local_path = Path(row["local_path"]).expanduser().absolute()
+            repository_exists = local_path.is_dir()
+            results.append({
                 **dict(row),
                 "skill_count": row["skill_count"] or 0,
                 "valid_count": row["valid_count"] or 0,
                 "invalid_count": row["invalid_count"] or 0,
                 "elevated_risk_count": row["elevated_risk_count"] or 0,
                 "pending_evaluation_count": pending_counts.get(row["id"], 0),
-            }
-            for row in rows
-        ]
+                "repository_exists": repository_exists,
+                "reclone_supported": bool(row["url"])
+                and not repository_exists
+                and local_path.parent.resolve() == sources_root
+                and row["update_policy"] == "remote",
+            })
+        return results
 
     @staticmethod
     def _filters(connection: Any) -> dict[str, Any]:

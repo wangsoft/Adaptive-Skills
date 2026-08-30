@@ -13,7 +13,8 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "source",
     "scan",
     "project",
-    "inventory",
+    "agent",
+    "profile",
     "llm",
 ];
 const CORE_BINARY_NAME: &str = "adaptive-skills-core";
@@ -296,6 +297,7 @@ mod tests {
     #[test]
     fn rejects_unknown_commands_and_null_bytes() {
         assert!(validate_request("/tmp/skills", &["unknown".into()]).is_err());
+        assert!(validate_request("/tmp/skills", &["inventory".into()]).is_err());
         assert!(validate_request("/tmp/skills\0escape", &["app".into()]).is_err());
     }
 
@@ -308,6 +310,8 @@ mod tests {
         ];
         assert!(validate_request("/tmp/skills", &args).is_ok());
         assert!(validate_request("/tmp/skills", &["llm".into(), "status".into()]).is_ok());
+        assert!(validate_request("/tmp/skills", &["agent".into(), "list".into()]).is_ok());
+        assert!(validate_request("/tmp/skills", &["profile".into(), "list".into()]).is_ok());
     }
 
     #[test]

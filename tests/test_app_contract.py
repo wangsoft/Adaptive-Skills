@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -71,8 +73,14 @@ class AppContractTests(unittest.TestCase):
         self.assertIn("categories", snapshot["filters"])
         self.assertTrue(snapshot["capabilities"]["audit_review"])
         self.assertTrue(snapshot["capabilities"]["bootstrap"])
+        self.assertTrue(snapshot["capabilities"]["source_forget"])
+        self.assertFalse(snapshot["capabilities"]["inventory_import"])
+        self.assertFalse(snapshot["capabilities"]["inventory_export"])
         self.assertGreaterEqual(len(snapshot["bootstrap"]["starters"]), 3)
-        self.assertEqual(len(snapshot["bootstrap"]["default_roots"]), 3)
+        self.assertEqual(
+            {item["id"] for item in snapshot["bootstrap"]["default_roots"]},
+            {"agents", "claude", "codex", "cursor", "gemini", "opencode"},
+        )
 
     def test_snapshot_can_filter_by_query_without_exposing_risky_skills(self) -> None:
         snapshot = AppService(self.settings).snapshot(
@@ -81,6 +89,20 @@ class AppContractTests(unittest.TestCase):
 
         self.assertEqual([skill["name"] for skill in snapshot["skills"]], ["docs-skill"])
         self.assertEqual(snapshot["query"], "technical documentation")
+
+    def test_snapshot_marks_a_missing_registered_repository_as_recloneable(self) -> None:
+        source_path = Path(AppService(self.settings).snapshot()["sources"][0]["local_path"])
+        with SourceManager(self.settings).database.transaction() as connection:
+            connection.execute(
+                "UPDATE sources SET url = ?",
+                ("https://github.com/example/sample-source.git",),
+            )
+        shutil.rmtree(source_path)
+
+        source = AppService(self.settings).snapshot()["sources"][0]
+
+        self.assertFalse(source["repository_exists"])
+        self.assertTrue(source["reclone_supported"])
 
     def test_cli_snapshot_emits_the_same_contract(self) -> None:
         environment = os.environ.copy()
@@ -110,6 +132,52 @@ class AppContractTests(unittest.TestCase):
         self.assertEqual(payload["contract_version"], APP_CONTRACT_VERSION)
         self.assertEqual(payload["summary"]["skill_count"], 2)
         self.assertEqual(len(payload["skills"]), 1)
+
+    def test_desktop_runtime_does_not_load_or_bundle_excel(self) -> None:
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import adaptive_skills.cli; "
+                    "assert 'adaptive_skills.inventory' not in sys.modules; "
+                    "assert 'openpyxl' not in sys.modules; print('sqlite-only')"
+                ),
+            ],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sqlite-only", result.stdout)
+        project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
+        self.assertNotIn(
+            "openpyxl",
+            " ".join(project["project"]["optional-dependencies"]["desktop"]),
+        )
+        self.assertNotIn(
+            "openpyxl",
+            (PROJECT_ROOT / "scripts" / "build_desktop_sidecar.py").read_text(),
+        )
+
+    def test_desktop_bundle_declares_complete_native_icons(self) -> None:
+        tauri_root = PROJECT_ROOT / "app" / "src-tauri"
+        configuration = json.loads(
+            tauri_root.joinpath("tauri.conf.json").read_text(encoding="utf-8")
+        )
+        icons = configuration["bundle"]["icon"]
+
+        self.assertIn("icons/icon.icns", icons)
+        self.assertIn("icons/icon.ico", icons)
+        self.assertTrue(any(icon.endswith(".png") for icon in icons))
+        for relative_path in icons:
+            icon_path = tauri_root / relative_path
+            self.assertTrue(icon_path.is_file(), relative_path)
+            self.assertGreater(icon_path.stat().st_size, 1024, relative_path)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,47 @@ from tests.helpers import write_skill
 
 
 class BootstrapDiscoveryTests(unittest.TestCase):
+    def test_discovery_excludes_provider_owned_claude_and_codex_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw)
+            library = home / "library"
+
+            claude_root = home / ".claude" / "skills"
+            claude_skill = write_skill(
+                claude_root, "docx", "A provider-managed Claude document Skill."
+            )
+            (claude_skill / "LICENSE.txt").write_text(
+                "© 2025 Anthropic, PBC. All rights reserved.\n"
+                "These materials may not be retained outside the Services.\n",
+                encoding="utf-8",
+            )
+
+            codex_root = home / ".codex" / "skills"
+            codex_skill = write_skill(
+                codex_root, "playwright", "A provider-managed Codex Skill."
+            )
+            vendor_skill = write_skill(
+                home / ".codex" / "vendor_imports" / "skills" / "skills" / ".curated",
+                "playwright",
+                "A provider-managed Codex Skill.",
+            )
+            self.assertEqual(
+                (codex_skill / "SKILL.md").read_bytes(),
+                (vendor_skill / "SKILL.md").read_bytes(),
+            )
+
+            result = BootstrapService(Settings.load(library)).discover(
+                [claude_root, codex_root]
+            )
+            by_name = {item["name"]: item for item in result["candidates"]}
+
+            self.assertEqual(by_name["docx"]["kind"], "provider")
+            self.assertEqual(by_name["docx"]["provider"], "Claude")
+            self.assertFalse(by_name["docx"]["importable"])
+            self.assertEqual(by_name["playwright"]["kind"], "provider")
+            self.assertEqual(by_name["playwright"]["provider"], "Codex")
+            self.assertFalse(by_name["playwright"]["importable"])
+
     def test_discovery_classifies_system_symlink_and_duplicate_skills(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

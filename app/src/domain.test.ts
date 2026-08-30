@@ -4,7 +4,10 @@ import {
   projectEntryCanSync,
   projectEntryRequiresForce,
   projectEntryStateLabel,
+  projectSelectionStateLabel,
   selectedRiskCount,
+  activationStateLabel,
+  profileActionLabel,
 } from "./domain";
 import type { SkillSummary } from "./types";
 
@@ -30,6 +33,13 @@ describe("project skill safety", () => {
     expect(canSelectSkill(risky, true)).toBe(true);
   });
 
+  it("never permits a Skill that already occupies the selected project target", () => {
+    expect(canSelectSkill(skill({ project_selection_state: "installed" }), true)).toBe(false);
+    expect(canSelectSkill(skill({ project_selection_state: "managed-conflict" }), true)).toBe(false);
+    expect(canSelectSkill(skill({ project_selection_state: "path-conflict" }), true)).toBe(false);
+    expect(projectSelectionStateLabel("installed")).toBe("已添加");
+  });
+
   it("counts elevated selected skills for the confirmation boundary", () => {
     const skills = [
       skill(),
@@ -46,5 +56,13 @@ describe("project skill safety", () => {
     expect(projectEntryRequiresForce("replaced")).toBe(true);
     expect(projectEntryRequiresForce("missing")).toBe(false);
     expect(projectEntryStateLabel("broken")).toBe("链接已损坏");
+  });
+
+  it("uses explicit labels for activation and profile states", () => {
+    expect(activationStateLabel("external")).toBe("外部已有");
+    expect(activationStateLabel("external-match")).toBe("可迁移");
+    expect(activationStateLabel("unavailable")).toBe("未发现目录");
+    expect(profileActionLabel("unresolved")).toBe("未解析");
+    expect(profileActionLabel("already-installed")).toBe("已安装");
   });
 });

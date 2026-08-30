@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -8,16 +9,18 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .app_service import AppService
+from .agent_targets import list_agent_targets, project_target_choices
 from .bootstrap import BootstrapService
 from .catalog import Catalog
 from .config import Settings
 from .database import Database
 from .errors import AdaptiveSkillsError, ValidationError
 from .evaluation import EvaluationService
-from .inventory import InventoryBridge
 from .projects import ProjectManager
+from .profiles import SkillProfileService
 from .scanner import CatalogScanner
 from .source_refresh import SourceRefreshService
+from .source_removal import SourceRemovalService
 from .sources import SourceManager
 
 
@@ -114,6 +117,32 @@ def _cmd_source_reconcile(arguments: argparse.Namespace) -> dict[str, Any]:
 def _cmd_source_policy(arguments: argparse.Namespace) -> dict[str, Any]:
     return SourceManager(_settings(arguments)).set_update_policy(
         arguments.source, arguments.policy
+    )
+
+
+def _cmd_source_remove_preview(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRemovalService(_settings(arguments)).preview(arguments.source)
+
+
+def _cmd_source_remove(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRemovalService(_settings(arguments)).remove(
+        arguments.source,
+        cleanup_references=not arguments.keep_references,
+        expected_digest=arguments.expected_digest,
+    )
+
+
+def _cmd_source_restore(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRemovalService(_settings(arguments)).restore(arguments.source)
+
+
+def _cmd_source_forget_preview(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRemovalService(_settings(arguments)).preview_forget(arguments.source)
+
+
+def _cmd_source_forget(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SourceRemovalService(_settings(arguments)).forget(
+        arguments.source, expected_digest=arguments.expected_digest
     )
 
 
@@ -256,6 +285,85 @@ def _cmd_project_plan(arguments: argparse.Namespace) -> dict[str, Any]:
         limit=arguments.limit,
         target=arguments.target,
         allow_risk=arguments.allow_risk,
+        category_l1=arguments.category_l1,
+        category_l2=arguments.category_l2,
+    )
+
+
+def _cmd_agent_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:
+    return list_agent_targets()
+
+
+def _cmd_project_matrix(arguments: argparse.Namespace) -> dict[str, Any]:
+    return ProjectManager(_settings(arguments)).activation_matrix(
+        query=arguments.query, limit=arguments.limit
+    )
+
+
+def _cmd_profile_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:
+    return SkillProfileService(_settings(arguments)).list()
+
+
+def _cmd_profile_show(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).get(arguments.profile_id)
+
+
+def _cmd_profile_save(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).save(
+        name=arguments.name,
+        description=arguments.description,
+        skill_ids=arguments.skill,
+        profile_id=arguments.profile_id,
+    )
+
+
+def _cmd_profile_capture(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).capture(
+        arguments.project,
+        name=arguments.name,
+        description=arguments.description,
+        profile_id=arguments.profile_id,
+    )
+
+
+def _cmd_profile_preview(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).preview(
+        arguments.profile_id,
+        arguments.project,
+        target=arguments.target,
+        allow_risk=arguments.allow_risk,
+    )
+
+
+def _cmd_profile_apply(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).apply(
+        arguments.profile_id,
+        arguments.project,
+        target=arguments.target,
+        allow_risk=arguments.allow_risk,
+    )
+
+
+def _cmd_profile_delete(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).delete(arguments.profile_id)
+
+
+def _cmd_profile_export(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).export_file(
+        arguments.profile_id,
+        arguments.output,
+        overwrite=arguments.overwrite,
+    )
+
+
+def _cmd_profile_import_preview(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).preview_import(arguments.input)
+
+
+def _cmd_profile_import(arguments: argparse.Namespace) -> dict[str, Any]:
+    return SkillProfileService(_settings(arguments)).import_file(
+        arguments.input,
+        expected_sha256=arguments.expected_sha256,
     )
 
 
@@ -292,6 +400,16 @@ def _cmd_project_unlink(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_project_adopt(arguments: argparse.Namespace) -> dict[str, Any]:
+    return ProjectManager(_settings(arguments)).adopt(
+        arguments.project,
+        arguments.entry,
+        arguments.skill,
+        allow_risk=arguments.allow_risk,
+        replace_content=arguments.replace_content,
+    )
+
+
 def _cmd_project_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:
     return ProjectManager(_settings(arguments)).list_projects()
 
@@ -311,13 +429,15 @@ def _cmd_project_relink(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_inventory_import(arguments: argparse.Namespace) -> dict[str, Any]:
-    return InventoryBridge(_settings(arguments)).import_xlsx(
+    inventory = importlib.import_module(f"{__package__}.inventory")
+    return inventory.InventoryBridge(_settings(arguments)).import_xlsx(
         arguments.workbook, sheet=arguments.sheet
     )
 
 
 def _cmd_inventory_export(arguments: argparse.Namespace) -> dict[str, Any]:
-    return InventoryBridge(_settings(arguments)).export_xlsx(
+    inventory = importlib.import_module(f"{__package__}.inventory")
+    return inventory.InventoryBridge(_settings(arguments)).export_xlsx(
         arguments.output, template=arguments.template
     )
 
@@ -415,6 +535,41 @@ def build_parser() -> argparse.ArgumentParser:
     source_policy.add_argument("source")
     source_policy.add_argument("policy", choices=["remote", "local"])
     _handler(source_policy, _cmd_source_policy)
+    source_remove_preview = source_commands.add_parser(
+        "remove-preview",
+        help="Preview managed references affected by removing a source",
+    )
+    source_remove_preview.add_argument("source")
+    _handler(source_remove_preview, _cmd_source_remove_preview)
+    source_remove = source_commands.add_parser(
+        "remove", help="Soft-remove a source after an exact impact preview"
+    )
+    source_remove.add_argument("source")
+    source_remove.add_argument("--expected-digest", required=True)
+    source_remove.add_argument(
+        "--keep-references",
+        action="store_true",
+        help="Leave managed project references in place",
+    )
+    _handler(source_remove, _cmd_source_remove)
+    source_restore = source_commands.add_parser(
+        "restore", help="Restore and rescan a soft-removed source"
+    )
+    source_restore.add_argument("source")
+    _handler(source_restore, _cmd_source_restore)
+    source_forget_preview = source_commands.add_parser(
+        "forget-preview",
+        help="Preview permanent removal of an already removed catalog record",
+    )
+    source_forget_preview.add_argument("source")
+    _handler(source_forget_preview, _cmd_source_forget_preview)
+    source_forget = source_commands.add_parser(
+        "forget",
+        help="Permanently remove an already removed source from SQLite; repository files are retained",
+    )
+    source_forget.add_argument("source")
+    source_forget.add_argument("--expected-digest", required=True)
+    _handler(source_forget, _cmd_source_forget)
 
     scan = commands.add_parser(
         "scan", help="Scan one source, or every registered source"
@@ -549,6 +704,13 @@ def build_parser() -> argparse.ArgumentParser:
     llm_reject.add_argument("evaluation")
     _handler(llm_reject, _cmd_llm_reject)
 
+    agent = commands.add_parser("agent", help="Inspect supported Agent targets")
+    agent_commands = agent.add_subparsers(dest="agent_command", required=True)
+    agent_list = agent_commands.add_parser(
+        "list", help="List global and project target paths"
+    )
+    _handler(agent_list, _cmd_agent_list)
+
     project = commands.add_parser(
         "project", help="Manage project-scoped skill references"
     )
@@ -573,14 +735,22 @@ def build_parser() -> argparse.ArgumentParser:
     project_relink.add_argument("project_id")
     project_relink.add_argument("new_path", type=Path)
     _handler(project_relink, _cmd_project_relink)
+    project_matrix = project_commands.add_parser(
+        "matrix", help="Project catalog Skills across global Agent targets"
+    )
+    project_matrix.add_argument("--query")
+    project_matrix.add_argument("--limit", type=int, default=20)
+    _handler(project_matrix, _cmd_project_matrix)
     project_plan = project_commands.add_parser(
         "plan", help="Recommend skills without changing the project"
     )
     project_plan.add_argument("project", type=Path)
-    project_plan.add_argument("--requirement", required=True)
+    project_plan.add_argument("--requirement")
+    project_plan.add_argument("--category-l1")
+    project_plan.add_argument("--category-l2")
     project_plan.add_argument("--limit", type=int, default=5)
     project_plan.add_argument(
-        "--target", choices=["auto", "universal", "codex", "claude"], default="auto"
+        "--target", choices=[*project_target_choices(), "root"], default="auto"
     )
     project_plan.add_argument("--allow-risk", action="store_true")
     _handler(project_plan, _cmd_project_plan)
@@ -590,7 +760,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_apply.add_argument("project", type=Path)
     project_apply.add_argument("--skill", action="append", required=True)
     project_apply.add_argument(
-        "--target", choices=["auto", "universal", "codex", "claude"], default="auto"
+        "--target", choices=[*project_target_choices(), "root"], default="auto"
     )
     project_apply.add_argument(
         "--mode", choices=["auto", "symlink", "copy"], default="auto"
@@ -631,6 +801,74 @@ def build_parser() -> argparse.ArgumentParser:
         "--force", action="store_true", help="Remove a changed managed entry"
     )
     _handler(project_unlink, _cmd_project_unlink)
+    project_adopt = project_commands.add_parser(
+        "adopt", help="Back up an external Skill and replace it with a managed link"
+    )
+    project_adopt.add_argument("project", type=Path)
+    project_adopt.add_argument("--entry", required=True)
+    project_adopt.add_argument("--skill", required=True)
+    project_adopt.add_argument("--allow-risk", action="store_true")
+    project_adopt.add_argument(
+        "--replace-content",
+        action="store_true",
+        help="Allow the selected catalog version to differ from the backed-up external copy",
+    )
+    _handler(project_adopt, _cmd_project_adopt)
+
+    profile = commands.add_parser(
+        "profile", help="Manage reusable Skill profiles"
+    )
+    profile_commands = profile.add_subparsers(
+        dest="profile_command", required=True
+    )
+    profile_list = profile_commands.add_parser("list")
+    _handler(profile_list, _cmd_profile_list)
+    profile_show = profile_commands.add_parser("show")
+    profile_show.add_argument("profile_id")
+    _handler(profile_show, _cmd_profile_show)
+    profile_save = profile_commands.add_parser("save")
+    profile_save.add_argument("--id", dest="profile_id")
+    profile_save.add_argument("--name", required=True)
+    profile_save.add_argument("--description")
+    profile_save.add_argument("--skill", action="append", required=True)
+    _handler(profile_save, _cmd_profile_save)
+    profile_capture = profile_commands.add_parser("capture")
+    profile_capture.add_argument("project", type=Path)
+    profile_capture.add_argument("--id", dest="profile_id")
+    profile_capture.add_argument("--name", required=True)
+    profile_capture.add_argument("--description")
+    _handler(profile_capture, _cmd_profile_capture)
+    profile_preview = profile_commands.add_parser("preview")
+    profile_preview.add_argument("profile_id")
+    profile_preview.add_argument("project", type=Path)
+    profile_preview.add_argument(
+        "--target", choices=[*project_target_choices(), "root"], default="auto"
+    )
+    profile_preview.add_argument("--allow-risk", action="store_true")
+    _handler(profile_preview, _cmd_profile_preview)
+    profile_apply = profile_commands.add_parser("apply")
+    profile_apply.add_argument("profile_id")
+    profile_apply.add_argument("project", type=Path)
+    profile_apply.add_argument(
+        "--target", choices=[*project_target_choices(), "root"], default="auto"
+    )
+    profile_apply.add_argument("--allow-risk", action="store_true")
+    _handler(profile_apply, _cmd_profile_apply)
+    profile_delete = profile_commands.add_parser("delete")
+    profile_delete.add_argument("profile_id")
+    _handler(profile_delete, _cmd_profile_delete)
+    profile_export = profile_commands.add_parser("export")
+    profile_export.add_argument("profile_id")
+    profile_export.add_argument("--output", type=Path, required=True)
+    profile_export.add_argument("--overwrite", action="store_true")
+    _handler(profile_export, _cmd_profile_export)
+    profile_import_preview = profile_commands.add_parser("import-preview")
+    profile_import_preview.add_argument("input", type=Path)
+    _handler(profile_import_preview, _cmd_profile_import_preview)
+    profile_import = profile_commands.add_parser("import")
+    profile_import.add_argument("input", type=Path)
+    profile_import.add_argument("--expected-sha256")
+    _handler(profile_import, _cmd_profile_import)
 
     inventory = commands.add_parser(
         "inventory", help="Import or export the optional Excel curation surface"

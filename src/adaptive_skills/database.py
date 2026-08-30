@@ -10,7 +10,7 @@ from typing import Any, Iterator
 from .config import Settings
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def utc_now() -> str:
@@ -159,6 +159,26 @@ class Database:
                     CHECK(status IN ('active', 'missing', 'invalid'))
             );
 
+            CREATE TABLE IF NOT EXISTS skill_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS skill_profile_entries (
+                profile_id TEXT NOT NULL
+                    REFERENCES skill_profiles(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                skill_id TEXT,
+                skill_name TEXT NOT NULL,
+                source_name TEXT,
+                source_url TEXT,
+                rel_path TEXT,
+                PRIMARY KEY(profile_id, position)
+            );
+
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
@@ -193,6 +213,10 @@ class Database:
                 ON audit_reviews(status, reviewed_at);
             CREATE INDEX IF NOT EXISTS idx_managed_projects_activity
                 ON managed_projects(last_activity_at DESC, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_skill_profiles_updated
+                ON skill_profiles(updated_at DESC, name COLLATE NOCASE);
+            CREATE INDEX IF NOT EXISTS idx_skill_profile_entries_name
+                ON skill_profile_entries(skill_name COLLATE NOCASE);
             """
         )
         source_columns = {

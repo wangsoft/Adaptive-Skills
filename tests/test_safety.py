@@ -95,6 +95,32 @@ class SafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "manifest"):
             ProjectManager(self.settings).status(project)
 
+    def test_adopted_backup_path_escape_is_rejected(self) -> None:
+        project = Path(self.temporary.name) / "backup-escape-project"
+        project.mkdir()
+        manifest_path = project / ".adaptive-skills" / "manifest.json"
+        manifest_path.parent.mkdir()
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema": "adaptive-skills-project/1",
+                    "project": str(project),
+                    "entries": [
+                        {
+                            "skill_id": self.safe["id"],
+                            "path": ".agents/skills/safe-skill",
+                            "mode": "symlink",
+                            "adopted_backup": ".adaptive-skills/../escaped",
+                        }
+                    ],
+                    "history": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValidationError, "Unsafe manifest entry path"):
+            ProjectManager(self.settings).status(project)
+
     def test_multi_skill_apply_rolls_back_new_entries_on_failure(self) -> None:
         write_skill(self.repo, "second-skill", "A second bounded workflow.")
         commit_all(self.repo, "second skill")
@@ -117,4 +143,16 @@ class SafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "simulated"):
                 manager.apply(project, [self.safe["id"], second["id"]])
         self.assertFalse(project.joinpath(".agents", "skills", "safe-skill").exists())
+
+    def test_apply_rolls_back_new_link_when_manifest_write_fails(self) -> None:
+        project = Path(self.temporary.name) / "manifest-write-failure"
+        project.mkdir()
+        manager = ProjectManager(self.settings)
+        destination = project / ".agents" / "skills" / "safe-skill"
+
+        with patch("adaptive_skills.projects._atomic_json", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                manager.apply(project, [self.safe["id"]])
+
+        self.assertFalse(destination.exists())
         self.assertFalse(project.joinpath(".adaptive-skills", "manifest.json").exists())
