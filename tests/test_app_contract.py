@@ -90,6 +90,25 @@ class AppContractTests(unittest.TestCase):
         self.assertEqual([skill["name"] for skill in snapshot["skills"]], ["docs-skill"])
         self.assertEqual(snapshot["query"], "technical documentation")
 
+    def test_snapshot_exposes_repository_stars_as_source_provenance(self) -> None:
+        with SourceManager(self.settings).database.transaction() as connection:
+            connection.execute(
+                "UPDATE sources SET github_stars = ?",
+                (12_345,),
+            )
+
+        snapshot = AppService(self.settings).snapshot(limit=20)
+
+        self.assertEqual(snapshot["sources"][0]["github_stars"], 12_345)
+        self.assertTrue(
+            all(skill["source_stars"] == 12_345 for skill in snapshot["skills"])
+        )
+        search = AppService(self.settings).snapshot(
+            query="technical documentation",
+            limit=20,
+        )
+        self.assertEqual(search["skills"][0]["source_stars"], 12_345)
+
     def test_snapshot_marks_a_missing_registered_repository_as_recloneable(self) -> None:
         source_path = Path(AppService(self.settings).snapshot()["sources"][0]["local_path"])
         with SourceManager(self.settings).database.transaction() as connection:

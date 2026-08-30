@@ -51,7 +51,7 @@ class Catalog:
                 f"""
                 SELECT s.*, src.name AS source_name, src.url AS source_url,
                        src.local_path AS source_path, src.tracked_ref, src.head_sha,
-                       src.status AS source_status,
+                       src.status AS source_status, src.github_stars AS source_stars,
                        a.category_l1, a.category_l2, a.problem, a.use_case,
                        a.score, a.score_source, a.notes, a.tags_json, a.review_status,
                        a.content_hash AS annotation_content_hash
@@ -88,7 +88,7 @@ class Catalog:
                 f"""
                 SELECT s.*, src.name AS source_name, src.url AS source_url,
                        src.local_path AS source_path, src.tracked_ref, src.head_sha,
-                       src.status AS source_status,
+                       src.status AS source_status, src.github_stars AS source_stars,
                        a.category_l1, a.category_l2, a.problem, a.use_case,
                        a.score, a.score_source, a.notes, a.tags_json, a.review_status,
                        a.content_hash AS annotation_content_hash
@@ -195,6 +195,8 @@ class Catalog:
                     "description": skill["description"],
                     "source": skill["source_name"],
                     "source_name": skill["source_name"],
+                    "source_url": skill.get("source_url"),
+                    "source_stars": skill.get("source_stars"),
                     "rel_path": skill["rel_path"],
                     "valid": skill["valid"],
                     "audit_severity": skill["audit_severity"],

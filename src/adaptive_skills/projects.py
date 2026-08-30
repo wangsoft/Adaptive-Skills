@@ -604,6 +604,8 @@ class ProjectManager:
                     "description": winner["description"],
                     "source": winner["source_name"],
                     "source_name": winner["source_name"],
+                    "source_url": winner.get("source_url"),
+                    "source_stars": winner.get("source_stars"),
                     "rel_path": winner["rel_path"],
                     "valid": winner["valid"],
                     "audit_severity": winner["audit_severity"],

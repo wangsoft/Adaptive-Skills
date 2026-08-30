@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canSelectSkill,
+  formatStarCount,
   projectEntryCanSync,
   projectEntryRequiresForce,
   projectEntryStateLabel,
@@ -23,6 +24,13 @@ const skill = (overrides: Partial<SkillSummary> = {}): SkillSummary => ({
 });
 
 describe("project skill safety", () => {
+  it("formats repository stars without inventing missing values", () => {
+    expect(formatStarCount(null)).toBe("—");
+    expect(formatStarCount(987)).toBe("987");
+    expect(formatStarCount(1_250)).toBe("1.3k");
+    expect(formatStarCount(2_000_000)).toBe("2m");
+  });
+
   it("never permits an invalid skill", () => {
     expect(canSelectSkill(skill({ valid: false }), true)).toBe(false);
   });

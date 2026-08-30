@@ -108,6 +108,7 @@ const ENGLISH: Record<string, string> = {
   "个来源": " sources",
   "个来源 ·": " sources ·",
   "根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。": "Git repositories cloned manually into the library can be discovered automatically. Remote updates accept fast-forward changes only.",
+  "根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。GitHub Star 在添加、重新扫描或更新来源时刷新，仅作热度参考。": "Git repositories cloned manually into the library can be discovered automatically. Remote updates accept fast-forward changes only. GitHub stars refresh when a source is added, rescanned, or updated and are shown only as popularity context.",
   "正在检查目录…": "Checking directories…",
   "发现本地仓库": "Discover local repositories",
   "正在更新全部来源…": "Updating all sources…",

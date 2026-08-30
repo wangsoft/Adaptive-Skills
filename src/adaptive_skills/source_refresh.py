@@ -23,6 +23,7 @@ class SourceRefreshService:
         discovered = discovery["sources"]
         for source in discovered:
             try:
+                source = self.sources.refresh_github_metadata(source["id"])
                 scan = self.scanner.scan(source["id"])[0]
                 results.append(
                     {
@@ -56,6 +57,7 @@ class SourceRefreshService:
             before_sha = git_head(Path(source["local_path"]))
             try:
                 if source.get("update_policy", "remote") == "local":
+                    self.sources.refresh_github_metadata(source["id"])
                     scan = self.scanner.scan(source["id"])[0]
                     results.append(
                         {

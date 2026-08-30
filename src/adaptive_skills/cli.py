@@ -147,7 +147,10 @@ def _cmd_source_forget(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_scan(arguments: argparse.Namespace) -> list[dict[str, Any]]:
-    return CatalogScanner(_settings(arguments)).scan(arguments.source)
+    settings = _settings(arguments)
+    if arguments.source:
+        SourceManager(settings).refresh_github_metadata(arguments.source, force=True)
+    return CatalogScanner(settings).scan(arguments.source)
 
 
 def _cmd_skill_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:

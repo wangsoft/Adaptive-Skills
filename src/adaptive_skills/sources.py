@@ -5,17 +5,24 @@ import re
 import shutil
 import subprocess
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
 from .config import Settings
 from .database import Database, path_is_within, row_dict, utc_now
 from .errors import ConflictError, NotFoundError, ValidationError
+from .github_metadata import (
+    fetch_github_repository_metadata,
+    github_repository_slug,
+)
 from .operation_lock import serialized_catalog_operation
 
 
 SOURCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 UPDATE_POLICIES = {"remote", "local"}
+GITHUB_METADATA_TTL = timedelta(hours=24)
+GITHUB_METADATA_RETRY_TTL = timedelta(hours=1)
 
 
 def _run_git(
@@ -137,11 +144,14 @@ class SourceManager:
                     raise ConflictError(
                         f"The missing repository is already registered as {same_remote['name']}; leave the display name empty or use that existing name to restore it"
                     )
-                return self._recover_missing_remote(
+                recovered = self._recover_missing_remote(
                     same_remote,
                     url=url,
                     tracked_ref=tracked_ref,
                 )
+                refreshed = self.refresh_github_metadata(recovered["id"], force=True)
+                refreshed["recovered"] = True
+                return refreshed
             raise ConflictError(f"Source repository is already registered: {same_remote['name']}")
         if name is not None:
             source_name = validate_source_name(name)
@@ -160,7 +170,8 @@ class SourceManager:
 
         self._clone_repository(url, destination, tracked_ref)
         try:
-            return self._insert(source_name, destination, url, tracked_ref)
+            source = self._insert(source_name, destination, url, tracked_ref)
+            return self.refresh_github_metadata(source["id"], force=True)
         except Exception:
             # The clone remains recoverable and visible if catalog registration fails.
             raise
@@ -512,8 +523,63 @@ class SourceManager:
             )
         return self.get(item["id"])
 
-    def update(self, source: str) -> dict:
+    def refresh_github_metadata(self, source: str, *, force: bool = False) -> dict:
         item = self.get(source)
+        if github_repository_slug(item.get("url")) is None:
+            return item
+        checked_at = item.get("github_metadata_checked_at")
+        if not force and checked_at:
+            try:
+                checked = datetime.fromisoformat(checked_at)
+                if checked.tzinfo is None:
+                    checked = checked.replace(tzinfo=UTC)
+                ttl = (
+                    GITHUB_METADATA_TTL
+                    if item.get("github_stars") is not None
+                    else GITHUB_METADATA_RETRY_TTL
+                )
+                if datetime.now(UTC) - checked < ttl:
+                    return item
+            except ValueError:
+                pass
+
+        metadata = fetch_github_repository_metadata(
+            item.get("url"),
+            etag=item.get("github_metadata_etag"),
+        )
+        checked_at = utc_now()
+        with self.database.transaction() as connection:
+            if metadata is None:
+                if item.get("github_stars") is None:
+                    connection.execute(
+                        "UPDATE sources SET github_metadata_checked_at = ? WHERE id = ?",
+                        (checked_at, item["id"]),
+                    )
+            elif metadata.not_modified:
+                connection.execute(
+                    """
+                    UPDATE sources
+                    SET github_metadata_etag = ?, github_metadata_checked_at = ?
+                    WHERE id = ?
+                    """,
+                    (metadata.etag, checked_at, item["id"]),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE sources
+                    SET github_stars = ?, github_metadata_etag = ?,
+                        github_metadata_checked_at = ?
+                    WHERE id = ?
+                    """,
+                    (metadata.stars, metadata.etag, checked_at, item["id"]),
+                )
+        return self.get(item["id"])
+
+    def update(self, source: str) -> dict:
+        # Repository metadata is independent of whether the local checkout can pull.
+        # Refresh it first so a dirty worktree does not leave provenance unavailable.
+        item = self.refresh_github_metadata(source)
         path = Path(item["local_path"])
         if item.get("update_policy", "remote") == "local":
             raise ConflictError(
@@ -549,4 +615,4 @@ class SourceManager:
                 "UPDATE sources SET head_sha = ?, status = 'updated', updated_at = ? WHERE id = ?",
                 (git_head(path), now, item["id"]),
             )
-        return self.get(item["id"])
+        return self.refresh_github_metadata(item["id"])

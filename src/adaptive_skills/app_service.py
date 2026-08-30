@@ -12,7 +12,7 @@ from .evaluation import EvaluationService
 from .source_removal import SourceRemovalService
 
 
-APP_CONTRACT_VERSION = 8
+APP_CONTRACT_VERSION = 9
 RISK_LEVELS = ("none", "low", "medium", "high", "critical")
 
 
@@ -200,6 +200,8 @@ class AppService:
             "id",
             "source_id",
             "source_name",
+            "source_url",
+            "source_stars",
             "name",
             "description",
             "rel_path",
@@ -226,6 +228,8 @@ class AppService:
         return {
             "id": skill["id"],
             "source_name": skill["source"],
+            "source_url": skill.get("source_url"),
+            "source_stars": skill.get("source_stars"),
             "name": skill["name"],
             "description": skill["description"],
             "rel_path": skill["rel_path"],

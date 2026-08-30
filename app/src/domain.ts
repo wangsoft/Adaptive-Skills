@@ -57,6 +57,16 @@ export function shortSha(value: string | null | undefined): string {
   return value ? value.slice(0, 8) : "—";
 }
 
+export function formatStarCount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1_000) return Math.round(value).toString();
+  const divisor = value >= 1_000_000 ? 1_000_000 : 1_000;
+  const suffix = value >= 1_000_000 ? "m" : "k";
+  const compact = value / divisor;
+  const digits = compact >= 100 ? compact.toFixed(0) : compact.toFixed(1);
+  return `${digits.replace(/\.0$/, "")}${suffix}`;
+}
+
 export function riskLabel(risk: RiskLevel): string {
   return translate({
     none: "无风险信号",

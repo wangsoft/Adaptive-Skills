@@ -10,7 +10,7 @@ from typing import Any, Iterator
 from .config import Settings
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -57,6 +57,9 @@ class Database:
                 update_policy TEXT NOT NULL DEFAULT 'remote'
                     CHECK(update_policy IN ('remote', 'local')),
                 head_sha TEXT,
+                github_stars INTEGER CHECK(github_stars IS NULL OR github_stars >= 0),
+                github_metadata_etag TEXT,
+                github_metadata_checked_at TEXT,
                 status TEXT NOT NULL DEFAULT 'registered',
                 last_scanned_at TEXT,
                 created_at TEXT NOT NULL,
@@ -226,6 +229,12 @@ class Database:
             connection.execute(
                 "ALTER TABLE sources ADD COLUMN update_policy TEXT NOT NULL DEFAULT 'remote'"
             )
+        if "github_stars" not in source_columns:
+            connection.execute("ALTER TABLE sources ADD COLUMN github_stars INTEGER")
+        if "github_metadata_etag" not in source_columns:
+            connection.execute("ALTER TABLE sources ADD COLUMN github_metadata_etag TEXT")
+        if "github_metadata_checked_at" not in source_columns:
+            connection.execute("ALTER TABLE sources ADD COLUMN github_metadata_checked_at TEXT")
         annotation_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(annotations)")
         }

@@ -34,13 +34,13 @@ Skill 不应该全部塞进全局上下文。Adaptive Skills 将 `~/skills` 作�
 
 ### 下载与安装
 
-适用于 **macOS Apple Silicon（arm64）**：[下载 Adaptive Skills v0.1.14 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.14/Adaptive-Skills_0.1.14_aarch64.dmg)。当前构建使用临时签名，**未经过 Apple 公证**。请只从本仓库下载，并在解除隔离前核对 SHA-256。
+适用于 **macOS Apple Silicon（arm64）**：[下载 Adaptive Skills v0.1.15 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.15/Adaptive-Skills_0.1.15_aarch64.dmg)。当前构建使用临时签名，**未经过 Apple 公证**。请只从本仓库下载，并在解除隔离前核对 SHA-256。
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Adaptive-Skills_0.1.14_aarch64.dmg
-# 预期值：4ce07d8c93eed8362003b9e76ec82447b25078203196ce7e9a5838ad25d87a60
-open Adaptive-Skills_0.1.14_aarch64.dmg
+shasum -a 256 Adaptive-Skills_0.1.15_aarch64.dmg
+# 预期值：9381e39945df31cd289346c4b71ac9edcc63da7c326ffc28b23410843f42b64c
+open Adaptive-Skills_0.1.15_aarch64.dmg
 ```
 
 将 App 拖入 `/Applications`，解除隔离后启动：
@@ -91,13 +91,13 @@ Skills should not all live in the global context. Adaptive Skills treats `~/skil
 
 ### Download and install
 
-For **macOS Apple Silicon (arm64)**: [download Adaptive Skills v0.1.14 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.14/Adaptive-Skills_0.1.14_aarch64.dmg). The current build uses an ad-hoc signature and is **not notarized by Apple**. Download it only from this repository and verify the SHA-256 checksum before removing quarantine.
+For **macOS Apple Silicon (arm64)**: [download Adaptive Skills v0.1.15 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.15/Adaptive-Skills_0.1.15_aarch64.dmg). The current build uses an ad-hoc signature and is **not notarized by Apple**. Download it only from this repository and verify the SHA-256 checksum before removing quarantine.
 
 ```bash
 cd ~/Downloads
-shasum -a 256 Adaptive-Skills_0.1.14_aarch64.dmg
-# Expected: 4ce07d8c93eed8362003b9e76ec82447b25078203196ce7e9a5838ad25d87a60
-open Adaptive-Skills_0.1.14_aarch64.dmg
+shasum -a 256 Adaptive-Skills_0.1.15_aarch64.dmg
+# Expected: 9381e39945df31cd289346c4b71ac9edcc63da7c326ffc28b23410843f42b64c
+open Adaptive-Skills_0.1.15_aarch64.dmg
 ```
 
 Drag the app into `/Applications`, remove quarantine, and launch it:

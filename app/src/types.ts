@@ -48,6 +48,8 @@ export interface SourceSummary {
   last_scanned_at: string | null;
   created_at: string;
   updated_at: string;
+  github_stars?: number | null;
+  github_metadata_checked_at?: string | null;
   skill_count: number;
   valid_count: number;
   invalid_count: number;
@@ -348,6 +350,8 @@ export interface SkillSummary {
   id: string;
   source_id?: string;
   source_name: string;
+  source_url?: string | null;
+  source_stars?: number | null;
   name: string;
   description: string;
   rel_path: string;

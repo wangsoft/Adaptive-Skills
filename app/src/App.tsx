@@ -24,6 +24,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Star,
   Trash2,
   Unlink,
   X,
@@ -38,6 +39,7 @@ import {
 import {
   canSelectSkill,
   formatDate,
+  formatStarCount,
   isElevatedRisk,
   projectEntryCanSync,
   projectEntryRequiresForce,
@@ -139,6 +141,43 @@ function loadLastView(): View {
   } catch {
     return "overview";
   }
+}
+
+function isGitHubSource(url: string | null | undefined): boolean {
+  return Boolean(url && (
+    /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?github\.com\//i.test(url)
+    || /^[^@\s]+@github\.com:/i.test(url)
+  ));
+}
+
+function GitHubStars({
+  url,
+  stars,
+  checkedAt,
+  className = "",
+}: {
+  url: string | null | undefined;
+  stars: number | null | undefined;
+  checkedAt?: string | null;
+  className?: string;
+}) {
+  if (!isGitHubSource(url)) return null;
+  const fullCount = stars == null ? null : stars.toLocaleString("en-US");
+  const title = fullCount == null
+    ? translate(
+      "尚未获取 GitHub Star；重新扫描可重试，更新来源时也会按缓存周期刷新。Star 不参与质量评分、需求匹配或风险判断。",
+      "GitHub stars have not been fetched yet. Rescanning retries immediately, while source updates refresh on the cache schedule. Stars do not affect quality, matching, or risk.",
+    )
+    : translate(
+      `GitHub Stars：${fullCount}${checkedAt ? ` · 更新于 ${formatDate(checkedAt)}` : ""}。仅作为仓库热度参考，不参与质量评分、需求匹配或风险判断。`,
+      `GitHub stars: ${fullCount}${checkedAt ? ` · Updated ${formatDate(checkedAt)}` : ""}. Repository popularity only; not used for quality, matching, or risk.`,
+    );
+  return (
+    <span className={`github-stars ${stars == null ? "missing" : ""} ${className}`.trim()} title={title} aria-label={title}>
+      <Star size={11} aria-hidden="true" />
+      {formatStarCount(stars)}
+    </span>
+  );
 }
 
 function useEscapeKey(active: boolean, onEscape: () => void) {
@@ -952,7 +991,7 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
             {snapshot.sources.slice(0, 5).map((source) => (
               <div className="compact-row" key={source.id}>
                 <div className="source-avatar">{source.name.slice(0, 2).toUpperCase()}</div>
-                <div><strong>{source.name}</strong><span>{source.skill_count} skills · {shortSha(source.head_sha)}</span></div>
+                <div><strong>{source.name}</strong><span className="compact-source-meta">{source.skill_count} skills · {shortSha(source.head_sha)}<GitHubStars url={source.url} stars={source.github_stars} checkedAt={source.github_metadata_checked_at} /></span></div>
                 <span className={source.invalid_count ? "badge warning" : "badge success"}>{source.invalid_count ? translate(`${source.invalid_count} 异常`, `${source.invalid_count} issues`) : "健康"}</span>
               </div>
             ))}
@@ -1029,7 +1068,7 @@ function SkillsView({ snapshot, onSearch, onReset, onOpen, detailLoading }: {
             </div>
             <div><h3>{skill.name}</h3><p>{skill.description || "暂无描述"}</p></div>
             {skill.reason?.length ? <div className="reason-line"><Sparkles size={13} />匹配 {skill.reason.slice(0, 2).map((item) => item.field).join("、")}</div> : null}
-            <div className="skill-meta"><span>{skill.category_l1 || "未分类"}{skill.category_l2 ? ` / ${skill.category_l2}` : ""}</span><span>{skill.source_name}</span></div>
+            <div className="skill-meta"><span>{skill.category_l1 || "未分类"}{skill.category_l2 ? ` / ${skill.category_l2}` : ""}</span><div className="skill-source-meta"><span>{skill.source_name}</span><GitHubStars url={skill.source_url} stars={skill.source_stars} /></div></div>
           </button>
         ))}
       </section>
@@ -1176,7 +1215,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
   return (
     <Localized><div className="stack gap-lg">
       <div className="section-toolbar">
-        <div><h2>{sources.length} 个来源</h2><p>根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。</p></div>
+        <div><h2>{sources.length} 个来源</h2><p>根目录下手动 Clone 的 Git 仓库可自动发现；远程更新只接受 fast-forward。GitHub Star 在添加、重新扫描或更新来源时刷新，仅作热度参考。</p></div>
         <div className="button-row">
           <button className="button secondary" disabled={Boolean(busy)} onClick={() => void reconcile()}>
             {busy === "source-reconcile" ? <LoaderCircle className="spin" size={16} /> : <Search size={16} />}
@@ -1262,7 +1301,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
             <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地归集目录"}</p></div><div className="source-badges"><span className="badge neutral">{source.url ? (source.update_policy === "local" ? "本地维护" : "远程跟随") : "本地归集"}</span><span className={source.repository_exists === false || source.invalid_count ? "badge warning" : "badge success"}>{source.repository_exists === false ? "目录缺失" : source.invalid_count ? "需检查" : "健康"}</span></div></div>
             <div className="source-stat-row"><div><span>Skills</span><strong>{source.skill_count}</strong></div><div><span>有效</span><strong>{source.valid_count}</strong></div><div><span>待评测</span><strong>{source.pending_evaluation_count}</strong></div></div>
             <div className="source-path" title={source.local_path}><FolderGit2 size={14} />{source.local_path}</div>
-            <div className="source-footer"><span>{source.url ? <><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</> : <><Layers3 size={14} />本地副本 · 不拉取</>}</span><span>{formatDate(source.last_scanned_at)}</span></div>
+            <div className="source-footer"><span>{source.url ? <><GitBranch size={14} />{source.tracked_ref || "当前分支"} · {shortSha(source.head_sha)}</> : <><Layers3 size={14} />本地副本 · 不拉取</>}</span><div className="source-footer-meta"><GitHubStars url={source.url} stars={source.github_stars} checkedAt={source.github_metadata_checked_at} /><span>{formatDate(source.last_scanned_at)}</span></div></div>
             <div className="source-actions">
               {source.repository_exists === false && source.reclone_supported && source.url ? <button className="button primary compact" disabled={Boolean(busy)} onClick={() => void onAdd(source.url!, source.name)}>{busy === "source-add" ? <LoaderCircle className="spin" size={15} /> : <GitBranch size={15} />}重新 Clone 并扫描</button> : <>
                 {source.url && <button className="button ghost compact" disabled={Boolean(busy)} onClick={() => void onSetPolicy(source.id, source.update_policy === "local" ? "remote" : "local")} title={source.update_policy === "local" ? "恢复自动拉取；工作区仍需保持干净" : "保留本地改动，全部更新时只扫描、不拉取"}>{busy === `policy-${source.id}` ? <LoaderCircle className="spin" size={15} /> : <Settings2 size={15} />}{source.update_policy === "local" ? "改为远程跟随" : "设为本地维护"}</button>}
@@ -2311,7 +2350,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
                   : undefined;
                 return (
                   <button className={`recommendation ${selected.has(skill.id) ? "selected" : ""} ${!selectable ? "disabled" : ""} ${projectBlocked ? "already-added" : !selectable ? "unavailable" : ""}`} key={skill.id} onClick={() => toggle(skill)} disabled={!selectable} title={blockedTitle}>
-                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className={`checkbox ${projectBlocked ? "installed" : ""}`}>{(projectBlocked || selected.has(skill.id)) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong>{projectBlocked && <i className={projectState === "installed" ? "badge success" : "badge warning"}>{blockedLabel}{stateDetail && skill.project_entry_state !== "clean" ? ` · ${stateDetail}` : ""}</i>}<i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && plan.discovery_mode !== "category" && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}{(skill.variant_count ?? 0) > 1 && <i className="badge neutral">已归并 {skill.variant_count} 个适配版本</i>}</span><p>{skill.description}</p><small>{plan.discovery_mode === "category" ? `${skill.category_l1}${skill.category_l2 ? ` / ${skill.category_l2}` : ""} · ${skill.source_name}` : skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title={plan.discovery_mode === "category" ? "按智能评分降序展示，未评分的 Skill 按名称排列" : "需求匹配排序分，不是 0–10 质量分"}><small>{plan.discovery_mode === "category" ? "质量" : "匹配"}</small>{plan.discovery_mode === "category" ? skill.annotation_score?.toFixed(1) || "—" : skill.score?.toFixed(1) || "—"}</span>
+                    <span className="rank">{String(index + 1).padStart(2, "0")}</span><span className={`checkbox ${projectBlocked ? "installed" : ""}`}>{(projectBlocked || selected.has(skill.id)) && <Check size={14} />}</span><span className="recommendation-body"><span className="recommendation-title"><strong>{skill.name}</strong>{projectBlocked && <i className={projectState === "installed" ? "badge success" : "badge warning"}>{blockedLabel}{stateDetail && skill.project_entry_state !== "clean" ? ` · ${stateDetail}` : ""}</i>}<i className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</i>{skill.annotation_score != null && plan.discovery_mode !== "category" && <i className="badge neutral">质量 {skill.annotation_score.toFixed(1)}/10</i>}{(skill.variant_count ?? 0) > 1 && <i className="badge neutral">已归并 {skill.variant_count} 个适配版本</i>}<GitHubStars url={skill.source_url} stars={skill.source_stars} className="recommendation-stars" /></span><p>{skill.description}</p><small>{plan.discovery_mode === "category" ? `${skill.category_l1}${skill.category_l2 ? ` / ${skill.category_l2}` : ""} · ${skill.source_name}` : skill.reason?.slice(0, 3).map((reason) => `${reason.field}: ${reason.terms.join("/") || reason.contribution}`).join(" · ") || skill.source_name}</small></span><span className="recommendation-score" title={plan.discovery_mode === "category" ? "按智能评分降序展示，未评分的 Skill 按名称排列" : "需求匹配排序分，不是 0–10 质量分"}><small>{plan.discovery_mode === "category" ? "质量" : "匹配"}</small>{plan.discovery_mode === "category" ? skill.annotation_score?.toFixed(1) || "—" : skill.score?.toFixed(1) || "—"}</span>
                   </button>
                 );
               })}
@@ -2467,7 +2506,7 @@ function SkillDrawer({ skill, busy, onReview, onClose }: {
         <div className="drawer-badges"><span className={`badge risk-${skill.audit_severity}`}>{riskLabel(skill.audit_severity)}</span><span className={skill.validation.length ? "badge warning" : "badge success"}>{skill.validation.length ? translate(
           `${skill.valid ? "格式提示" : "格式不兼容"} ${skill.validation.length}`,
           `${skill.valid ? "Format guidance" : "Format incompatible"} ${skill.validation.length}`,
-        ) : "格式兼容"}</span>{(skill.capability_hint_count ?? 0) > 0 && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}{skill.score != null && <span className="badge neutral">智能评分 {skill.score}</span>}</div>
+        ) : "格式兼容"}</span>{(skill.capability_hint_count ?? 0) > 0 && <span className="badge neutral">能力提示 {skill.capability_hint_count}</span>}{skill.score != null && <span className="badge neutral">智能评分 {skill.score}</span>}<GitHubStars url={skill.source_url} stars={skill.source_stars} className="drawer-stars" /></div>
         <div className="detail-grid"><div><span>一级分类</span><strong>{skill.category_l1 || "未分类"}</strong></div><div><span>二级分类</span><strong>{skill.category_l2 || "未分类"}</strong></div><div><span>许可证</span><strong>{skill.license || "未声明"}</strong></div><div><span>来源提交</span><strong>{shortSha(skill.head_sha)}</strong></div></div>
         {(skill.problem || skill.use_case) && <section className="drawer-section"><h3>AI 整理</h3>{skill.problem && <div className="insight-block"><span>解决的问题</span><p>{skill.problem}</p></div>}{skill.use_case && <div className="insight-block"><span>应用场景</span><p>{skill.use_case}</p></div>}</section>}
         <FindingSection title="格式兼容性" description="只判断 SKILL.md 与 frontmatter 是否符合加载规范，不参与安全风险等级。" findings={skill.validation} tone="format" empty="格式兼容，未发现阻止加载的问题。" />

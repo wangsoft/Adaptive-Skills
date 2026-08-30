@@ -56,6 +56,8 @@ def main() -> int:
     info_plist = app / "Contents" / "Info.plist"
     with info_plist.open("rb") as handle:
         bundle_info = plistlib.load(handle)
+    if bundle_info.get("CFBundleShortVersionString") != "0.1.15":
+        raise RuntimeError("The packaged app returned an unexpected release version")
     icon_name = bundle_info.get("CFBundleIconFile")
     if not icon_name:
         raise RuntimeError("The packaged app does not declare CFBundleIconFile")
@@ -94,9 +96,9 @@ def main() -> int:
         reconciled = _run(core, library, "source", "reconcile")
         snapshot = _run(core, library, "app", "snapshot", "--limit", "10")
         project_status = _run(core, library, "project", "status", str(project))
-        if initialized.get("schema_version") != 7:
+        if initialized.get("schema_version") != 8:
             raise RuntimeError("The packaged core returned an unexpected schema version")
-        if snapshot.get("contract_version") != 8:
+        if snapshot.get("contract_version") != 9:
             raise RuntimeError("The packaged core returned an unexpected app contract")
         if not snapshot.get("capabilities", {}).get("bootstrap"):
             raise RuntimeError("The packaged core does not include bootstrap support")
