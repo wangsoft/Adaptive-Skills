@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .app_service import AppService
-from .agent_targets import list_agent_targets, project_target_choices
+from .agent_targets import CustomAgentTargetService
 from .bootstrap import BootstrapService
 from .catalog import Catalog
 from .config import Settings
@@ -294,7 +294,21 @@ def _cmd_project_plan(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_agent_list(arguments: argparse.Namespace) -> list[dict[str, Any]]:
-    return list_agent_targets()
+    return CustomAgentTargetService(_settings(arguments)).list()
+
+
+def _cmd_agent_add(arguments: argparse.Namespace) -> dict[str, Any]:
+    return CustomAgentTargetService(_settings(arguments)).create(
+        target_id=arguments.target_id,
+        label=arguments.name,
+        global_path=arguments.global_path,
+        detect_path=arguments.detect_path,
+        project_path=arguments.project_path,
+    )
+
+
+def _cmd_agent_remove(arguments: argparse.Namespace) -> dict[str, Any]:
+    return CustomAgentTargetService(_settings(arguments)).delete(arguments.target_id)
 
 
 def _cmd_project_matrix(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -713,6 +727,20 @@ def build_parser() -> argparse.ArgumentParser:
         "list", help="List global and project target paths"
     )
     _handler(agent_list, _cmd_agent_list)
+    agent_add = agent_commands.add_parser(
+        "add", help="Register a custom Agent target in the library database"
+    )
+    agent_add.add_argument("--id", dest="target_id", required=True)
+    agent_add.add_argument("--name", required=True)
+    agent_add.add_argument("--global-path", type=Path, required=True)
+    agent_add.add_argument("--detect-path", type=Path, required=True)
+    agent_add.add_argument("--project-path", required=True)
+    _handler(agent_add, _cmd_agent_add)
+    agent_remove = agent_commands.add_parser(
+        "remove", help="Forget a custom Agent target without deleting files"
+    )
+    agent_remove.add_argument("target_id")
+    _handler(agent_remove, _cmd_agent_remove)
 
     project = commands.add_parser(
         "project", help="Manage project-scoped skill references"
@@ -752,9 +780,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_plan.add_argument("--category-l1")
     project_plan.add_argument("--category-l2")
     project_plan.add_argument("--limit", type=int, default=5)
-    project_plan.add_argument(
-        "--target", choices=[*project_target_choices(), "root"], default="auto"
-    )
+    project_plan.add_argument("--target", default="auto")
     project_plan.add_argument("--allow-risk", action="store_true")
     _handler(project_plan, _cmd_project_plan)
     project_apply = project_commands.add_parser(
@@ -762,9 +788,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_apply.add_argument("project", type=Path)
     project_apply.add_argument("--skill", action="append", required=True)
-    project_apply.add_argument(
-        "--target", choices=[*project_target_choices(), "root"], default="auto"
-    )
+    project_apply.add_argument("--target", default="auto")
     project_apply.add_argument(
         "--mode", choices=["auto", "symlink", "copy"], default="auto"
     )
@@ -844,17 +868,13 @@ def build_parser() -> argparse.ArgumentParser:
     profile_preview = profile_commands.add_parser("preview")
     profile_preview.add_argument("profile_id")
     profile_preview.add_argument("project", type=Path)
-    profile_preview.add_argument(
-        "--target", choices=[*project_target_choices(), "root"], default="auto"
-    )
+    profile_preview.add_argument("--target", default="auto")
     profile_preview.add_argument("--allow-risk", action="store_true")
     _handler(profile_preview, _cmd_profile_preview)
     profile_apply = profile_commands.add_parser("apply")
     profile_apply.add_argument("profile_id")
     profile_apply.add_argument("project", type=Path)
-    profile_apply.add_argument(
-        "--target", choices=[*project_target_choices(), "root"], default="auto"
-    )
+    profile_apply.add_argument("--target", default="auto")
     profile_apply.add_argument("--allow-risk", action="store_true")
     _handler(profile_apply, _cmd_profile_apply)
     profile_delete = profile_commands.add_parser("delete")

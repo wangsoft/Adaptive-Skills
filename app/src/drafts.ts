@@ -1,4 +1,4 @@
-export type ProjectTarget = "auto" | "codex" | "claude" | "root";
+export type ProjectTarget = string;
 export type ProjectDiscoveryMode = "requirement" | "category";
 export type DraftLLMProvider = "codex" | "claude" | "openai-compatible";
 export type DraftLLMAPIMode = "auto" | "responses" | "chat-completions";
@@ -113,8 +113,9 @@ export function loadProjectDraft(
   const value = read(storage, key("project", library));
   if (!value || typeof value !== "object") return { ...EMPTY_PROJECT_DRAFT };
   const draft = value as Partial<ProjectDraft>;
-  const target = ["auto", "codex", "claude", "root"].includes(String(draft.target))
-    ? draft.target as ProjectTarget
+  const rawTarget = typeof draft.target === "string" ? draft.target.trim() : "";
+  const target = /^(?:root|[a-z][a-z0-9-]{0,31})$/.test(rawTarget)
+    ? rawTarget
     : "auto";
   const discoveryMode = draft.discoveryMode === "category" ? "category" : "requirement";
   return {

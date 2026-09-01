@@ -24,6 +24,8 @@ import {
   llmReviewArgs,
   auditReviewArgs,
   agentTargetArgs,
+  agentTargetAddArgs,
+  agentTargetRemoveArgs,
   profileApplyArgs,
   profileCaptureArgs,
   profileDeleteArgs,
@@ -60,6 +62,8 @@ import type {
   BootstrapInstallResult,
   ActivationMatrix,
   AgentTarget,
+  AgentTargetRemovalResult,
+  CustomAgentTargetInput,
   SkillProfile,
   SkillProfileExportResult,
   SkillProfileImportPreview,
@@ -335,6 +339,13 @@ export const api = {
   ),
   agentTargets: (library: string) =>
     runCommand<AgentTarget[]>(library, agentTargetArgs()),
+  agentTargetAdd: (library: string, target: CustomAgentTargetInput) =>
+    runCommand<AgentTarget>(library, agentTargetAddArgs(target)),
+  agentTargetRemove: (library: string, targetId: string) =>
+    runCommand<AgentTargetRemovalResult>(
+      library,
+      agentTargetRemoveArgs(targetId),
+    ),
   projectMatrix: (library: string, query = "", limit = 20) =>
     runCommand<ActivationMatrix>(
       library,

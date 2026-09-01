@@ -24,6 +24,8 @@ import {
   llmReviewArgs,
   auditReviewArgs,
   agentTargetArgs,
+  agentTargetAddArgs,
+  agentTargetRemoveArgs,
   profileApplyArgs,
   profileCaptureArgs,
   profileDeleteArgs,
@@ -210,6 +212,21 @@ describe("desktop command contract", () => {
 
   it("keeps Agent matrix and profile actions explicit", () => {
     expect(agentTargetArgs()).toEqual(["agent", "list"]);
+    expect(agentTargetAddArgs({
+      id: "nova",
+      name: "Nova Agent",
+      globalPath: "/Users/demo/.nova/skills",
+      detectPath: "/Users/demo/.nova",
+      projectPath: ".nova/skills",
+    })).toEqual([
+      "agent", "add",
+      "--id", "nova",
+      "--name", "Nova Agent",
+      "--global-path", "/Users/demo/.nova/skills",
+      "--detect-path", "/Users/demo/.nova",
+      "--project-path", ".nova/skills",
+    ]);
+    expect(agentTargetRemoveArgs("nova")).toEqual(["agent", "remove", "nova"]);
     expect(projectMatrixArgs("presentation tools", 20)).toEqual([
       "project", "matrix", "--limit", "20", "--query", "presentation tools",
     ]);

@@ -236,6 +236,27 @@ export function agentTargetArgs(): string[] {
   return ["agent", "list"];
 }
 
+export function agentTargetAddArgs(target: {
+  id: string;
+  name: string;
+  globalPath: string;
+  detectPath: string;
+  projectPath: string;
+}): string[] {
+  return [
+    "agent", "add",
+    "--id", target.id.trim(),
+    "--name", target.name.trim(),
+    "--global-path", target.globalPath.trim(),
+    "--detect-path", target.detectPath.trim(),
+    "--project-path", target.projectPath.trim(),
+  ];
+}
+
+export function agentTargetRemoveArgs(targetId: string): string[] {
+  return ["agent", "remove", targetId];
+}
+
 export function projectMatrixArgs(query = "", limit = 20): string[] {
   return [
     "project", "matrix",

@@ -1,4 +1,4 @@
-import { FormEvent } from "react";
+import { FormEvent, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -7,6 +7,7 @@ import {
   Link2,
   LoaderCircle,
   PackageCheck,
+  Plus,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -27,12 +28,148 @@ import type {
   ActivationMatrix,
   ActivationRow,
   ActivationTarget,
+  AgentTarget,
+  CustomAgentTargetInput,
   ProjectStatus,
   SkillProfilePreview,
   SkillProfileImportPreview,
   SkillProfileImportStatus,
   SkillProfileSummary,
 } from "./types";
+
+const EMPTY_AGENT_TARGET: CustomAgentTargetInput = {
+  id: "",
+  name: "",
+  globalPath: "",
+  detectPath: "",
+  projectPath: "",
+};
+
+export function AgentTargetRegistryPanel({
+  targets,
+  busy,
+  onAdd,
+  onRemove,
+  onChooseDirectory,
+}: {
+  targets: AgentTarget[];
+  busy: string | null;
+  onAdd: (target: CustomAgentTargetInput) => Promise<boolean>;
+  onRemove: (target: AgentTarget) => void;
+  onChooseDirectory: (title: string) => Promise<string | null>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<CustomAgentTargetInput>(EMPTY_AGENT_TARGET);
+  const customTargets = targets.filter((target) => !target.built_in);
+  const setField = <K extends keyof CustomAgentTargetInput,>(
+    field: K,
+    value: CustomAgentTargetInput[K],
+  ) => setDraft((current) => ({ ...current, [field]: value }));
+  const chooseDirectory = async (
+    field: "globalPath" | "detectPath",
+    title: string,
+  ) => {
+    const selected = await onChooseDirectory(title);
+    if (selected) setField(field, selected);
+  };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (await onAdd(draft)) {
+      setDraft(EMPTY_AGENT_TARGET);
+      setEditing(false);
+    }
+  };
+  const complete = Object.values(draft).every((value) => value.trim());
+
+  return (
+    <Localized><section className="panel agent-target-registry-panel">
+      <div className="panel-heading agent-target-registry-heading">
+        <div>
+          <h3>Agent 目标目录</h3>
+          <p>内置目标保持只读；自定义目标保存在当前仓库的 SQLite 中，并参与系统项目、推荐和全局安装矩阵。</p>
+        </div>
+        <div className="agent-target-heading-actions">
+          <span className="badge neutral">{targets.length - customTargets.length} 个内置 · {customTargets.length} 个自定义</span>
+          <button
+            className="button secondary compact"
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => setEditing((value) => !value)}
+          >
+            {editing ? <X size={14} /> : <Plus size={14} />}
+            {editing ? "取消" : "添加自定义 Agent"}
+          </button>
+        </div>
+      </div>
+
+      {editing && (
+        <form className="agent-target-form" onSubmit={submit}>
+          <label className="input-field">
+            <span>目标 ID</span>
+            <input
+              required
+              maxLength={32}
+              pattern="[a-z][a-z0-9-]{0,31}"
+              aria-describedby="agent-target-id-hint"
+              autoComplete="off"
+              spellCheck={false}
+              value={draft.id}
+              onChange={(event) => setField("id", event.target.value)}
+              placeholder="例如：nova"
+            />
+            <small id="agent-target-id-hint">小写字母开头，只能使用小写字母、数字和连字符。</small>
+          </label>
+          <label className="input-field">
+            <span>显示名称</span>
+            <input required maxLength={80} value={draft.name} onChange={(event) => setField("name", event.target.value)} placeholder="例如：Nova Agent" />
+          </label>
+          <label className="input-field wide-field">
+            <span>全局 Skills 目录</span>
+            <div className="input-with-button">
+              <input required spellCheck={false} value={draft.globalPath} onChange={(event) => setField("globalPath", event.target.value)} placeholder="/Users/name/.nova/skills" />
+              <button type="button" aria-label="选择全局 Skills 目录" onClick={() => void chooseDirectory("globalPath", translate("选择全局 Skills 目录", "Choose the global Skills directory"))}><FolderOpen size={16} /></button>
+            </div>
+          </label>
+          <label className="input-field wide-field">
+            <span>Agent 检测目录</span>
+            <div className="input-with-button">
+              <input required spellCheck={false} value={draft.detectPath} onChange={(event) => setField("detectPath", event.target.value)} placeholder="/Users/name/.nova" />
+              <button type="button" aria-label="选择 Agent 检测目录" onClick={() => void chooseDirectory("detectPath", translate("选择 Agent 检测目录", "Choose the agent detection directory"))}><FolderOpen size={16} /></button>
+            </div>
+            <small>检测目录存在时，即使 Skills 子目录尚未创建，也会显示为待初始化。</small>
+          </label>
+          <label className="input-field">
+            <span>项目内 Skills 路径</span>
+            <input required spellCheck={false} value={draft.projectPath} onChange={(event) => setField("projectPath", event.target.value)} placeholder=".nova/skills" />
+          </label>
+          <div className="agent-target-form-actions">
+            <small>目录必须位于当前用户主目录内；保存配置不会创建、移动或删除任何目录。</small>
+            <button className="button primary compact" disabled={!complete || Boolean(busy)}>
+              {busy === "agent-target-add" ? <LoaderCircle className="spin" size={14} /> : <Plus size={14} />}
+              保存目标
+            </button>
+          </div>
+        </form>
+      )}
+
+      {customTargets.length > 0 && (
+        <div className="custom-agent-target-list">
+          {customTargets.map((target) => (
+            <div className="custom-agent-target-row" key={target.id}>
+              <div className={`custom-agent-target-state ${target.detected ? "detected" : "missing"}`}><Link2 size={15} /></div>
+              <div className="custom-agent-target-copy">
+                <div><strong>{target.label}</strong><span className="badge neutral">{target.id}</span></div>
+                <span title={target.global_path}>{target.global_path}</span>
+                <small>{target.project_path} · {target.detected ? "已检测" : "未检测"}</small>
+              </div>
+              <button className="text-button danger" type="button" disabled={Boolean(busy)} onClick={() => onRemove(target)}><Trash2 size={13} />移除配置</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section></Localized>
+  );
+}
 
 function profileImportStatusLabel(status: SkillProfileImportStatus): string {
   return {
@@ -125,10 +262,10 @@ export function ProjectActivationMatrix({
                       type="button"
                       className="target-heading"
                       onClick={() => onOpenTarget(target)}
-                      disabled={!target.exists}
+                      disabled={!target.exists && !target.detected}
                     >
                       <strong>{target.label}</strong>
-                      <span title={target.path}>{target.path}</span>
+                      <span title={target.path}>{target.status === "pending" ? `${translate("待初始化", "Pending setup")} · ` : ""}{target.path}</span>
                       <i className={"target-dot status-" + target.status} />
                     </button>
                   </th>

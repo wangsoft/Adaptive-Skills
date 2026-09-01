@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 
 from adaptive_skills.config import Settings
 from adaptive_skills.database import SCHEMA_VERSION, Database
+from adaptive_skills.errors import ValidationError
 from adaptive_skills.sources import SourceManager
 
 
@@ -54,6 +56,21 @@ class DatabaseMigrationTests(unittest.TestCase):
                     "SELECT value FROM schema_meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
             self.assertEqual(int(version), SCHEMA_VERSION)
+            backups = list(
+                settings.state_dir.glob(
+                    f"backups/catalog-v0-before-v{SCHEMA_VERSION}-*.db"
+                )
+            )
+            self.assertEqual(len(backups), 1)
+            with sqlite3.connect(backups[0]) as backup:
+                preserved = backup.execute(
+                    "SELECT name FROM sources WHERE id = 'old-source'"
+                ).fetchone()
+                old_columns = {
+                    row[1] for row in backup.execute("PRAGMA table_info(sources)")
+                }
+            self.assertEqual(preserved, ("old-source",))
+            self.assertNotIn("update_policy", old_columns)
             with Database(settings).transaction() as migrated_database:
                 annotation_columns = {
                     row[1]
@@ -79,6 +96,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 profile_entry_table = migrated_database.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name='skill_profile_entries'"
                 ).fetchone()
+                custom_target_table = migrated_database.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='custom_agent_targets'"
+                ).fetchone()
                 evaluation_columns = {
                     row[1]
                     for row in migrated_database.execute(
@@ -92,7 +112,110 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIsNotNone(evaluation_insight_table)
             self.assertIsNotNone(profile_table)
             self.assertIsNotNone(profile_entry_table)
+            self.assertIsNotNone(custom_target_table)
             self.assertIn("profile_id", evaluation_columns)
+
+    def test_newer_catalog_is_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = Settings.load(Path(raw) / "library")
+            settings.ensure()
+            with sqlite3.connect(settings.database) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE schema_meta (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    CREATE TABLE sentinel(value TEXT NOT NULL);
+                    INSERT INTO schema_meta(key, value)
+                    VALUES('schema_version', '999');
+                    INSERT INTO sentinel(value) VALUES('preserve-me');
+                    """
+                )
+
+            with self.assertRaisesRegex(ValidationError, "newer"):
+                Database(settings).connect()
+
+            with sqlite3.connect(settings.database) as connection:
+                version = connection.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+                sentinel = connection.execute("SELECT value FROM sentinel").fetchone()[0]
+            self.assertEqual(version, "999")
+            self.assertEqual(sentinel, "preserve-me")
+            self.assertFalse((settings.state_dir / "backups").exists())
+
+    def test_previous_schema_version_is_backed_up_before_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = Settings.load(Path(raw) / "library")
+            settings.ensure()
+            with sqlite3.connect(settings.database) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE schema_meta (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    CREATE TABLE sentinel(value TEXT NOT NULL);
+                    INSERT INTO schema_meta(key, value)
+                    VALUES('schema_version', '8');
+                    INSERT INTO sentinel(value) VALUES('before-v9');
+                    """
+                )
+
+            with Database(settings).transaction() as migrated:
+                version = migrated.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+                custom_targets = migrated.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type = 'table' AND name = 'custom_agent_targets'
+                    """
+                ).fetchone()
+
+            backups = list(
+                settings.state_dir.glob(
+                    f"backups/catalog-v8-before-v{SCHEMA_VERSION}-*.db"
+                )
+            )
+            self.assertEqual(version, str(SCHEMA_VERSION))
+            self.assertIsNotNone(custom_targets)
+            self.assertEqual(len(backups), 1)
+            with sqlite3.connect(backups[0]) as backup:
+                backup_version = backup.execute(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                ).fetchone()[0]
+                sentinel = backup.execute("SELECT value FROM sentinel").fetchone()[0]
+                custom_targets = backup.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type = 'table' AND name = 'custom_agent_targets'
+                    """
+                ).fetchone()
+            self.assertEqual(backup_version, "8")
+            self.assertEqual(sentinel, "before-v9")
+            self.assertIsNone(custom_targets)
+            self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
+
+    def test_malformed_catalog_version_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            settings = Settings.load(Path(raw) / "library")
+            settings.ensure()
+            with sqlite3.connect(settings.database) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE schema_meta (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    INSERT INTO schema_meta(key, value)
+                    VALUES('schema_version', 'not-a-version');
+                    """
+                )
+
+            with self.assertRaisesRegex(ValidationError, "version is invalid"):
+                Database(settings).connect()
 
 
 if __name__ == "__main__":

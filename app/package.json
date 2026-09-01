@@ -1,13 +1,14 @@
 {
   "name": "adaptive-skills-desktop",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:sidecar": "../.venv/bin/python ../scripts/build_desktop_sidecar.py",
     "build:bundle": "npm run build:sidecar && npm run build",
+    "build:dmg": "tauri build --ci --bundles app,dmg",
     "verify:bundle": "../.venv/bin/python ../scripts/verify_desktop_bundle.py",
     "test": "vitest",
     "tauri": "tauri"

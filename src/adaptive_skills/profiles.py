@@ -9,7 +9,6 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .agent_targets import get_agent_target
 from .catalog import Catalog
 from .config import Settings
 from .database import Database, path_is_within, utc_now
@@ -24,11 +23,11 @@ MAX_PROFILE_ENTRIES = 500
 
 
 class SkillProfileService:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, home: Path | None = None):
         self.settings = settings
         self.database = Database(settings)
         self.catalog = Catalog(settings, self.database)
-        self.projects = ProjectManager(settings)
+        self.projects = ProjectManager(settings, home=home)
 
     def list(self) -> list[dict[str, Any]]:
         with self.database.transaction() as connection:
@@ -468,8 +467,8 @@ class SkillProfileService:
         if not named:
             return None, "目录中没有同名 Skill"
         scope = self.projects._system_scope(project) if target == "root" else None
-        target_id = scope["id"] if scope is not None else get_agent_target(target).id
-        prefixes = get_agent_target(target_id).preferred_rel_prefixes
+        target_id = scope["id"] if scope is not None else self.projects._agent_target(target).id
+        prefixes = self.projects._agent_target(target_id).preferred_rel_prefixes
 
         same_source = [
             skill

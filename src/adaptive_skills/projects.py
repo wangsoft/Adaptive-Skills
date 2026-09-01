@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_scopes import default_agent_roots
-from .agent_targets import get_agent_target
+from .agent_targets import CustomAgentTargetService
 from .catalog import Catalog
 from .config import Settings
 from .database import Database, path_is_within, utc_now
@@ -73,10 +73,33 @@ def _safe_entry_path(project: Path, relative: str) -> Path:
 
 
 class ProjectManager:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, home: Path | None = None):
         self.settings = settings
         self.database = Database(settings)
         self.catalog = Catalog(settings, self.database)
+        self.agent_targets = CustomAgentTargetService(
+            settings, self.database, home=home
+        )
+        self._custom_agent_targets_cache = None
+
+    def _custom_agent_targets(self):
+        if self._custom_agent_targets_cache is None:
+            self._custom_agent_targets_cache = {
+                target.id: target for target in self.agent_targets.custom_targets()
+            }
+        return self._custom_agent_targets_cache
+
+    def _agent_roots(self) -> list[dict[str, Any]]:
+        return [
+            *default_agent_roots(self.agent_targets.home),
+            *(target.as_dict() for target in self._custom_agent_targets().values()),
+        ]
+
+    def _agent_target(self, identifier: str):
+        custom = self._custom_agent_targets().get(identifier)
+        if custom is not None:
+            return custom
+        return self.agent_targets.get(identifier)
 
     @staticmethod
     def manifest_path(project: Path) -> Path:
@@ -141,6 +164,44 @@ class ProjectManager:
                 raise ValidationError(f"Malformed project manifest history: {path}")
         manifest["history"] = history
         return manifest
+
+    @staticmethod
+    def _scope_is_detected(scope: dict[str, Any]) -> bool:
+        return bool(scope.get("exists") or scope.get("detected"))
+
+    def _project_root(self, project: str | Path) -> Path:
+        root = Path(project).expanduser().resolve()
+        if root.is_dir():
+            return root
+        scope = self._system_scope_value(str(root))
+        if (
+            scope is not None
+            and self._scope_is_detected(scope)
+            and not _lexists(root)
+        ):
+            return root
+        raise NotFoundError(f"Project directory does not exist: {root}")
+
+    def _provision_system_root(self, root: Path) -> bool:
+        if root.is_dir():
+            return False
+        scope = self._system_scope(root)
+        if scope is None or not self._scope_is_detected(scope) or root.exists():
+            raise NotFoundError(f"Project directory does not exist: {root}")
+        root.mkdir(parents=True, exist_ok=False)
+        return True
+
+    @staticmethod
+    def _rollback_provisioned_root(root: Path) -> None:
+        manifest_directory = root / MANIFEST_DIRECTORY
+        try:
+            manifest_directory.rmdir()
+        except OSError:
+            pass
+        try:
+            root.rmdir()
+        except OSError:
+            pass
 
     @staticmethod
     def _last_activity(manifest: dict[str, Any]) -> str | None:
@@ -361,14 +422,26 @@ class ProjectManager:
             "system_scope": None,
             "protected": False,
             "external_count": 0,
+            "detected": False,
+            "provisioned": True,
         }
 
     def _system_projects(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        for scope in default_agent_roots():
-            if not scope["exists"]:
+        for scope in self._agent_roots():
+            if not self._scope_is_detected(scope):
                 continue
             root = Path(scope["path"])
+            if _lexists(root) and not root.is_dir():
+                results.append(
+                    self._system_summary(
+                        scope,
+                        {"entries": [], "history": []},
+                        status="invalid",
+                        problem="System Agent Skills path is not a directory",
+                    )
+                )
+                continue
             try:
                 results.append(self._system_summary(scope, self.load_manifest(root)))
             except (OSError, ValidationError):
@@ -416,10 +489,11 @@ class ProjectManager:
             "system_scope": scope["id"],
             "protected": True,
             "external_count": self._external_count(root, manifest),
+            "detected": self._scope_is_detected(scope),
+            "provisioned": root.is_dir(),
         }
 
-    @staticmethod
-    def _system_scope_value(value: str) -> dict[str, Any] | None:
+    def _system_scope_value(self, value: str) -> dict[str, Any] | None:
         try:
             candidate = Path(value).expanduser().resolve()
         except (OSError, RuntimeError):
@@ -427,7 +501,7 @@ class ProjectManager:
         return next(
             (
                 scope
-                for scope in default_agent_roots()
+                for scope in self._agent_roots()
                 if Path(scope["path"]).expanduser().resolve() == candidate
             ),
             None,
@@ -476,7 +550,7 @@ class ProjectManager:
         category_l1: str | None = None,
         category_l2: str | None = None,
     ) -> dict[str, Any]:
-        root = _safe_project(project)
+        root = self._project_root(project)
         target_root = self._target_path(target, root)
         normalized_requirement = (requirement or "").strip()
         normalized_l1 = (category_l1 or "").strip()
@@ -643,7 +717,7 @@ class ProjectManager:
     ) -> tuple[str, ...]:
         scope = self._system_scope(project) if target == "root" else None
         scope_id = scope["id"] if scope is not None else target
-        return get_agent_target(scope_id).preferred_rel_prefixes
+        return self._agent_target(scope_id).preferred_rel_prefixes
 
     def activation_matrix(
         self,
@@ -681,13 +755,29 @@ class ProjectManager:
                 continue
             grouped.setdefault(skill["name"].casefold(), []).append(skill)
 
-        targets = default_agent_roots()
+        targets = self._agent_roots()
         target_context: dict[str, dict[str, Any]] = {}
         matrix_targets: list[dict[str, Any]] = []
         for target in targets:
             target_view = dict(target)
             root = Path(target["path"])
-            if not target["exists"]:
+            if _lexists(root) and not root.is_dir():
+                target_view["status"] = "invalid"
+                target_view["problem"] = "System Agent Skills path is not a directory"
+                target_context[target["id"]] = {
+                    "manifest": {"entries": []},
+                    "external": {},
+                    "problem": target_view["problem"],
+                }
+            elif not root.is_dir() and target.get("detected"):
+                target_view["status"] = "pending"
+                target_view["problem"] = None
+                target_context[target["id"]] = {
+                    "manifest": {"entries": []},
+                    "external": {},
+                    "problem": None,
+                }
+            elif not root.is_dir():
                 target_view["status"] = "unavailable"
                 target_view["problem"] = None
                 target_context[target["id"]] = {
@@ -766,7 +856,7 @@ class ProjectManager:
     def _matrix_variant(
         self, variants: list[dict[str, Any]], target_id: str
     ) -> dict[str, Any]:
-        prefixes = get_agent_target(target_id).preferred_rel_prefixes
+        prefixes = self._agent_target(target_id).preferred_rel_prefixes
         return min(
             variants,
             key=lambda item: (
@@ -799,7 +889,7 @@ class ProjectManager:
             "detail_state": None,
             "read_only": False,
         }
-        if target["status"] != "available":
+        if target["status"] not in {"available", "pending"}:
             return {
                 **base,
                 "state": "unavailable",
@@ -884,7 +974,7 @@ class ProjectManager:
         requirement: str | None = None,
         allow_risk: bool = False,
     ) -> dict[str, Any]:
-        root = _safe_project(project)
+        root = self._project_root(project)
         if not skill_ids:
             raise ValidationError("At least one --skill is required")
         if mode not in {"auto", "symlink", "copy"}:
@@ -925,6 +1015,9 @@ class ProjectManager:
                 )
             prepared.append((skill, source, destination, relative))
 
+        provisioned_root = (
+            self._provision_system_root(root) if not root.is_dir() else False
+        )
         installed: list[dict[str, Any]] = []
         newly_created: list[tuple[Path, dict[str, Any]]] = []
         try:
@@ -970,6 +1063,8 @@ class ProjectManager:
             for destination, entry in reversed(newly_created):
                 if _lexists(destination):
                     self._remove_verified(destination, entry, force=True)
+            if provisioned_root:
+                self._rollback_provisioned_root(root)
             raise
 
         previous_manifest = json.loads(json.dumps(manifest))
@@ -991,8 +1086,12 @@ class ProjectManager:
             for destination, entry in reversed(newly_created):
                 if _lexists(destination):
                     self._remove_verified(destination, entry, force=True)
-            if self.manifest_path(root).is_file():
+            if provisioned_root and self.manifest_path(root).is_file():
+                self.manifest_path(root).unlink()
+            elif self.manifest_path(root).is_file():
                 _atomic_json(self.manifest_path(root), previous_manifest)
+            if provisioned_root:
+                self._rollback_provisioned_root(root)
             raise
         self._register_manifest(root, manifest)
         return {
@@ -1003,7 +1102,7 @@ class ProjectManager:
 
     @serialized_catalog_operation
     def status(self, project: str | Path) -> dict[str, Any]:
-        root = _safe_project(project)
+        root = self._project_root(project)
         manifest = self.load_manifest(root)
         entries = [self._entry_status(root, entry) for entry in manifest["entries"]]
         scope = self._system_scope(root)
@@ -1019,6 +1118,8 @@ class ProjectManager:
             "project_kind": "system" if scope is not None else "project",
             "system_scope": scope["id"] if scope is not None else None,
             "protected": scope is not None,
+            "detected": self._scope_is_detected(scope) if scope is not None else False,
+            "provisioned": root.is_dir(),
             "external_entries": self._external_entries(root, manifest)
             if scope is not None
             else [],
@@ -1247,7 +1348,7 @@ class ProjectManager:
             raise ValidationError(
                 f"Project history limit must be between 1 and {HISTORY_LIMIT}"
             )
-        root = _safe_project(project)
+        root = self._project_root(project)
         manifest = self.load_manifest(root)
         if self.manifest_path(root).is_file():
             self._register_manifest(root, manifest)
@@ -1450,7 +1551,7 @@ class ProjectManager:
             if self._system_scope(project) is None:
                 raise ValidationError("The root target is reserved for system Agent projects")
             return Path(".")
-        return Path(get_agent_target(target).project_path)
+        return Path(self._agent_target(target).project_path)
 
     @staticmethod
     def _install(source: Path, destination: Path, mode: str) -> str:

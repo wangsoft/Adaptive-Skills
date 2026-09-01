@@ -15,9 +15,11 @@ from tests.helpers import commit_all, init_repo, write_skill
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_cli(library: Path, *args: str) -> object:
+def run_cli(library: Path, *args: str, home: Path | None = None) -> object:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(PROJECT_ROOT / "src")
+    if home is not None:
+        environment["HOME"] = str(home)
     result = subprocess.run(
         [sys.executable, "-m", "adaptive_skills", "--library", str(library), *args],
         cwd=PROJECT_ROOT,
@@ -34,6 +36,43 @@ def run_cli(library: Path, *args: str) -> object:
 
 
 class CliTests(unittest.TestCase):
+    def test_cli_can_manage_custom_agent_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            home = root / "home"
+            library = home / "skills"
+            detect_path = home / ".nova"
+            global_path = detect_path / "skills"
+            detect_path.mkdir(parents=True)
+
+            created = run_cli(
+                library,
+                "agent",
+                "add",
+                "--id",
+                "nova",
+                "--name",
+                "Nova Agent",
+                "--global-path",
+                str(global_path),
+                "--detect-path",
+                str(detect_path),
+                "--project-path",
+                ".nova/skills",
+                home=home,
+            )
+            self.assertEqual(created["id"], "nova")
+            listed = run_cli(library, "agent", "list", home=home)
+            self.assertIn("nova", {item["id"] for item in listed})
+
+            removed = run_cli(library, "agent", "remove", "nova", home=home)
+            self.assertTrue(removed["deleted"])
+            self.assertTrue(detect_path.is_dir())
+            self.assertNotIn(
+                "nova",
+                {item["id"] for item in run_cli(library, "agent", "list", home=home)},
+            )
+
     def test_cli_can_discover_and_copy_import_local_skills(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

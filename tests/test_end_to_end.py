@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from adaptive_skills.catalog import Catalog
 from adaptive_skills.app_service import AppService
+from adaptive_skills.agent_targets import CustomAgentTargetService
 from adaptive_skills.config import Settings
 from adaptive_skills.errors import ConflictError, NotFoundError, ValidationError
 from adaptive_skills.projects import HISTORY_LIMIT, ProjectManager
+from adaptive_skills.profiles import SkillProfileService
 from adaptive_skills.scanner import CatalogScanner, hash_skill_tree
 from adaptive_skills.sources import SourceManager
 
@@ -86,6 +88,51 @@ class EndToEndTests(unittest.TestCase):
                 (self.presentation["id"],),
             ).fetchone()[0]
         self.assertEqual(indexed, 1)
+
+    def test_custom_agent_target_joins_system_projects_and_activation_matrix(self) -> None:
+        home = Path(self.temporary.name) / "home"
+        detect_path = home / ".nova"
+        global_path = detect_path / "skills"
+        detect_path.mkdir(parents=True)
+        CustomAgentTargetService(self.settings, home=home).create(
+            target_id="nova",
+            label="Nova Agent",
+            global_path=global_path,
+            detect_path=detect_path,
+            project_path=".nova/skills",
+        )
+        manager = ProjectManager(self.settings, home=home)
+
+        projects = manager.list_projects()
+        custom = next(item for item in projects if item["id"] == "system:nova")
+        self.assertTrue(custom["detected"])
+        self.assertFalse(custom["provisioned"])
+        matrix = manager.activation_matrix(query="presentation", limit=20)
+        target = next(item for item in matrix["targets"] if item["id"] == "nova")
+        self.assertEqual(target["status"], "pending")
+
+        manager.apply(
+            global_path,
+            [self.presentation["id"]],
+            target="root",
+            mode="symlink",
+        )
+        self.assertTrue((global_path / "presentation-maker").is_symlink())
+
+        project = Path(self.temporary.name) / "custom-target-project"
+        project.mkdir()
+        profiles = SkillProfileService(self.settings, home=home)
+        profile = profiles.save(
+            name="Nova baseline",
+            skill_ids=[self.presentation["id"]],
+        )
+        preview = profiles.preview(profile["id"], project, target="nova")
+        self.assertTrue(preview["can_apply"])
+        self.assertEqual(preview["counts"]["install"], 1)
+        profiles.apply(profile["id"], project, target="nova")
+        self.assertTrue(
+            (project / ".nova" / "skills" / "presentation-maker").is_symlink()
+        )
 
     def test_project_recommendations_stay_in_library_and_merge_agent_variants(
         self,
@@ -442,6 +489,8 @@ Use the local project workflow.
         manager = ProjectManager(self.settings)
 
         with patch("adaptive_skills.projects.default_agent_roots", return_value=scopes):
+            with self.assertRaisesRegex(NotFoundError, "does not exist"):
+                manager.status(Path(self.temporary.name) / "missing-project")
             projects = manager.list_projects()
             self.assertEqual(len(projects), 1)
             self.assertEqual(projects[0]["id"], "system:codex")
@@ -461,6 +510,77 @@ Use the local project workflow.
                 manager.forget("system:codex")
             with self.assertRaisesRegex(ValidationError, "cannot be relinked"):
                 manager.relink("system:codex", global_root)
+
+    def test_detected_agent_without_skills_directory_is_provisioned_on_first_apply(
+        self,
+    ) -> None:
+        agent_home = Path(self.temporary.name) / "home" / ".codex"
+        agent_home.mkdir(parents=True)
+        global_root = agent_home / "skills"
+        scopes = [
+            {
+                "id": "codex",
+                "label": "Codex",
+                "path": str(global_root),
+                "detect_path": str(agent_home),
+                "detected": True,
+                "exists": False,
+            }
+        ]
+        manager = ProjectManager(self.settings)
+
+        with patch("adaptive_skills.projects.default_agent_roots", return_value=scopes):
+            projects = manager.list_projects()
+            self.assertEqual(len(projects), 1)
+            self.assertEqual(projects[0]["id"], "system:codex")
+            self.assertTrue(projects[0]["detected"])
+            self.assertFalse(projects[0]["provisioned"])
+            self.assertFalse(global_root.exists())
+
+            status = manager.status(global_root)
+            history = manager.history(global_root)
+            plan = manager.plan(
+                global_root,
+                "presentation decks",
+                target="root",
+                limit=5,
+            )
+            self.assertEqual(status["project_kind"], "system")
+            self.assertFalse(status["managed"])
+            self.assertTrue(status["detected"])
+            self.assertFalse(status["provisioned"])
+            self.assertEqual(history["events"], [])
+            self.assertIn(
+                self.presentation["id"],
+                {item["id"] for item in plan["recommendations"]},
+            )
+            matrix = manager.activation_matrix(query="presentation", limit=20)
+            self.assertEqual(matrix["targets"][0]["status"], "pending")
+            matrix_row = next(
+                item for item in matrix["rows"] if item["name"] == "presentation-maker"
+            )
+            self.assertEqual(matrix_row["cells"][0]["state"], "absent")
+            self.assertFalse(global_root.exists())
+
+            with patch.object(manager, "_install", side_effect=OSError("blocked")):
+                with self.assertRaisesRegex(OSError, "blocked"):
+                    manager.apply(
+                        global_root,
+                        [self.presentation["id"]],
+                        target="root",
+                    )
+            self.assertFalse(global_root.exists())
+
+            result = manager.apply(
+                global_root,
+                [self.presentation["id"]],
+                target="root",
+            )
+            installed = global_root / "presentation-maker"
+            self.assertTrue(global_root.is_dir())
+            self.assertTrue(installed.is_symlink())
+            self.assertTrue(Path(result["manifest"]).is_file())
+            self.assertTrue(manager.status(global_root)["provisioned"])
 
     def test_external_skill_adoption_is_exact_and_uninstall_restores_original(self) -> None:
         global_root = Path(self.temporary.name) / "home" / ".codex" / "skills"

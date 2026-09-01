@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import Settings
+from .errors import ValidationError
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def utc_now() -> str:
@@ -23,13 +24,30 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         self.settings.ensure()
+        database_existed = (
+            self.settings.database.is_file()
+            and self.settings.database.stat().st_size > 0
+        )
         connection = sqlite3.connect(self.settings.database)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        self._migrate(connection)
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 5000")
+            current_version = self._schema_version(connection)
+            if current_version > SCHEMA_VERSION:
+                raise ValidationError(
+                    "Catalog schema "
+                    f"v{current_version} is newer than this Adaptive Skills build "
+                    f"supports (v{SCHEMA_VERSION}); upgrade the app before opening it"
+                )
+            if database_existed and current_version < SCHEMA_VERSION:
+                self._backup_before_migration(connection, current_version)
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            self._migrate(connection)
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -39,6 +57,62 @@ class Database:
                 yield connection
         finally:
             connection.close()
+
+    @staticmethod
+    def _schema_version(connection: sqlite3.Connection) -> int:
+        try:
+            table = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name = 'schema_meta'
+                """
+            ).fetchone()
+            if table is None:
+                return 0
+            row = connection.execute(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ValidationError("Catalog schema metadata is unreadable") from exc
+        if row is None:
+            return 0
+        try:
+            version = int(row[0])
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("Catalog schema version is invalid") from exc
+        if version < 0:
+            raise ValidationError("Catalog schema version is invalid")
+        return version
+
+    def _backup_before_migration(
+        self, connection: sqlite3.Connection, current_version: int
+    ) -> Path:
+        backup_directory = self.settings.state_dir / "backups"
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = backup_directory / (
+            f"catalog-v{current_version}-before-v{SCHEMA_VERSION}-{timestamp}.db"
+        )
+        suffix = 1
+        while backup_path.exists():
+            backup_path = backup_directory / (
+                f"catalog-v{current_version}-before-v{SCHEMA_VERSION}-"
+                f"{timestamp}-{suffix}.db"
+            )
+            suffix += 1
+        try:
+            backup_connection = sqlite3.connect(backup_path)
+            try:
+                connection.backup(backup_connection)
+            finally:
+                backup_connection.close()
+            backup_path.chmod(0o600)
+        except (OSError, sqlite3.Error) as exc:
+            backup_path.unlink(missing_ok=True)
+            raise ValidationError(
+                f"Could not back up the catalog before schema migration: {exc}"
+            ) from exc
+        return backup_path
 
     def _migrate(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -160,6 +234,16 @@ class Database:
                 last_activity_at TEXT,
                 status TEXT NOT NULL DEFAULT 'active'
                     CHECK(status IN ('active', 'missing', 'invalid'))
+            );
+
+            CREATE TABLE IF NOT EXISTS custom_agent_targets (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                global_path TEXT NOT NULL UNIQUE,
+                detect_path TEXT NOT NULL,
+                project_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS skill_profiles (

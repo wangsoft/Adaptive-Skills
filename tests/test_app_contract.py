@@ -61,6 +61,7 @@ class AppContractTests(unittest.TestCase):
         self.assertEqual(snapshot["sources"][0]["pending_evaluation_count"], 2)
         self.assertEqual(snapshot["summary"]["pending_evaluation_count"], 2)
         self.assertEqual(snapshot["llm"]["config"]["provider"], "disabled")
+        self.assertTrue(snapshot["capabilities"]["custom_agent_targets"])
         self.assertEqual(len(snapshot["llm"]["taxonomy"]["level_one"]), 15)
         self.assertEqual(len(snapshot["skills"]), 2)
         self.assertNotIn("body", snapshot["skills"][0])

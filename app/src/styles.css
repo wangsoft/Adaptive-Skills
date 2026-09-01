@@ -186,6 +186,27 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .activation-matrix-panel { padding: 19px; overflow: hidden; }
+.agent-target-registry-panel { padding: 19px; }
+.agent-target-registry-heading { align-items: flex-start; }
+.agent-target-registry-heading h3 { margin-top: 5px; }
+.agent-target-registry-heading p { max-width: 720px; margin: 5px 0 0; color: var(--quiet); font-size: 8px; line-height: 1.55; }
+.agent-target-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.agent-target-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 12px; margin-top: 15px; padding: 15px; border: 1px solid rgba(119,224,175,.14); border-radius: 11px; background: rgba(119,224,175,.025); }
+.agent-target-form .input-field { margin-bottom: 11px; }
+.agent-target-form .wide-field { grid-column: span 2; }
+.agent-target-form .input-field small { color: var(--quiet); font-size: 7px; line-height: 1.45; }
+.agent-target-form-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 3px; }
+.agent-target-form-actions > small { max-width: 650px; color: var(--quiet); font-size: 7px; line-height: 1.5; }
+.custom-agent-target-list { margin-top: 14px; border-top: 1px solid var(--line); }
+.custom-agent-target-row { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.custom-agent-target-state { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--quiet); background: rgba(255,255,255,.025); }
+.custom-agent-target-state.detected { color: var(--mint); background: rgba(119,224,175,.07); }
+.custom-agent-target-copy { min-width: 0; }
+.custom-agent-target-copy > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.custom-agent-target-copy strong { min-width: 0; overflow-wrap: anywhere; font-size: 10px; }
+.custom-agent-target-copy > span, .custom-agent-target-copy > small { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.custom-agent-target-copy > span { color: var(--quiet); font-family: var(--mono); font-size: 8px; }
+.custom-agent-target-copy > small { color: #78867e; font-size: 7px; }
 .activation-heading { align-items: flex-start; }
 .activation-heading p, .project-profile-panel .panel-heading p { max-width: 650px; margin: 5px 0 0; color: var(--quiet); font-size: 8px; line-height: 1.5; }
 .activation-toolbar { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto; gap: 9px; align-items: center; margin: 15px 0 12px; }
@@ -210,6 +231,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .target-heading span { grid-column: 1; overflow: hidden; color: var(--quiet); font-family: "SFMono-Regular", Consolas, monospace; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .target-dot { grid-column: 2; grid-row: 1 / 3; align-self: center; width: 6px; height: 6px; border-radius: 50%; background: var(--quiet); }
 .target-dot.status-available { background: var(--mint); box-shadow: 0 0 7px rgba(119,224,175,.38); }
+.target-dot.status-pending { background: #85b9f8; box-shadow: 0 0 7px rgba(133,185,248,.3); }
 .target-dot.status-unavailable, .target-dot.status-invalid { background: var(--amber); }
 .activation-control { width: 100%; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; color: #94a39a; background: rgba(255,255,255,.02); font-size: 8px; white-space: nowrap; }
 button.activation-control { cursor: pointer; }
@@ -272,6 +294,8 @@ button.activation-control:hover:not(:disabled) { border-color: var(--line-strong
   .profile-transfer-actions { justify-content: flex-start; }
   .profile-capture { grid-template-columns: 1fr auto; }
   .profile-capture > div { grid-column: 1 / -1; }
+  .agent-target-registry-heading { display: grid; }
+  .agent-target-heading-actions { justify-content: flex-start; }
 }
 
 @media (max-width: 1050px) {

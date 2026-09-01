@@ -33,6 +33,7 @@ import { api } from "./api";
 import appIconUrl from "./assets/app-icon.svg";
 import { Localized, translate, useLanguage } from "./i18n";
 import {
+  AgentTargetRegistryPanel,
   ProjectActivationMatrix,
   ProjectProfilesPanel,
 } from "./ProjectControls";
@@ -110,6 +111,7 @@ import type {
   ActivationRow,
   ActivationTarget,
   AgentTarget,
+  CustomAgentTargetInput,
   SkillProfilePreview,
   SkillProfileImportPreview,
   SkillProfileSummary,
@@ -1806,6 +1808,17 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   }, [library, onError]);
 
   useEffect(() => {
+    if (
+      agentTargets.length > 0
+      && target !== "auto"
+      && target !== "root"
+      && !agentTargets.some((item) => item.id === target)
+    ) {
+      setTarget("auto");
+    }
+  }, [agentTargets, target]);
+
+  useEffect(() => {
     void loadProjects();
     void loadMatrix();
     void loadProfiles();
@@ -1898,7 +1911,38 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
       loadProjects(),
       loadMatrix(matrixQuery),
       loadProfiles(),
+      loadAgentTargets(),
     ]);
+  };
+
+  const chooseAgentTargetDirectory = async (title: string): Promise<string | null> => {
+    const selectedPath = await open({ directory: true, multiple: false, title });
+    return typeof selectedPath === "string" ? selectedPath : null;
+  };
+
+  const addAgentTarget = async (
+    input: CustomAgentTargetInput,
+  ): Promise<boolean> => {
+    let succeeded = false;
+    await run("agent-target-add", async () => {
+      await api.agentTargetAdd(library, input);
+      await refreshControlState();
+      succeeded = true;
+    });
+    return succeeded;
+  };
+
+  const removeAgentTarget = (agentTarget: AgentTarget) => {
+    if (agentTarget.built_in) return;
+    if (!window.confirm(translate(
+      "移除自定义 Agent 目标“" + agentTarget.label + "”？\n\n只删除当前仓库中的 SQLite 配置，不会删除目标目录或任何文件。若仍有受管 Skill，系统会阻止移除。",
+      `Remove custom agent target “${agentTarget.label}”?\n\nOnly its SQLite configuration in the current library will be removed. No target directory or file will be deleted. Removal is blocked while managed Skills remain.`,
+    ))) return;
+    void run("agent-target-remove", async () => {
+      await api.agentTargetRemove(library, agentTarget.id);
+      if (target === agentTarget.id) setTarget("auto");
+      await refreshControlState();
+    });
   };
 
   const searchMatrix = () => run("matrix-load", async () => {
@@ -1906,7 +1950,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
   });
 
   const openMatrixTarget = (matrixTarget: ActivationTarget) => {
-    if (!matrixTarget.exists) return;
+    if (!matrixTarget.exists && !matrixTarget.detected) return;
     setProject(matrixTarget.path);
     setTarget("root");
     setPlan(null);
@@ -2279,13 +2323,20 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
         : "尚未选择分类" : requirement || "尚未填写需求"}</p></div><ArrowRight size={18} /></button>}
       <section className="project-index-grid">
         {projects.map((item) => <article className={`panel managed-project-card status-${item.status}`} key={item.id}>
-          <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon">{item.project_kind === "system" ? <Database size={18} /> : <Link2 size={18} />}</div><div><div className="project-card-badges">{item.project_kind === "system" && <span className="badge neutral">系统项目</span>}<span className={`badge ${item.status === "active" ? item.clean ? "success" : "warning" : "warning"}`}>{item.project_kind === "system" && item.status === "active" ? item.clean ? "已连接" : "有漂移" : item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span></div><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
-          <div className="managed-project-meta"><span>{item.entry_count} 个受管</span>{item.project_kind === "system" && <span>{item.external_count} 个外部已有</span>}<span>{item.history_count} 条操作</span><span>{formatDate(item.last_activity_at)}</span></div>
+          <button className="managed-project-main" disabled={item.status !== "active"} onClick={() => void openManagedProject(item)}><div className="managed-project-icon">{item.project_kind === "system" ? <Database size={18} /> : <Link2 size={18} />}</div><div><div className="project-card-badges">{item.project_kind === "system" && <span className="badge neutral">系统项目</span>}<span className={`badge ${item.status === "active" && item.provisioned && item.clean ? "success" : "warning"}`}>{item.project_kind === "system" && !item.provisioned ? "待初始化" : item.project_kind === "system" && item.status === "active" ? item.clean ? "已连接" : "有漂移" : item.status === "active" ? item.clean ? "已同步" : "有漂移" : item.status === "missing" ? "目录已移动" : "manifest 异常"}</span></div><h3>{item.display_name}</h3><p title={item.path}>{item.path}</p></div><ChevronRight size={17} /></button>
+          <div className="managed-project-meta"><span>{item.entry_count} 个受管</span>{item.project_kind === "system" && <span>{item.external_count} 个外部已有</span>}{item.project_kind === "system" && !item.provisioned && <span>首次安装时创建目录</span>}<span>{item.history_count} 条操作</span><span>{formatDate(item.last_activity_at)}</span></div>
           <div className="managed-project-actions">{item.project_kind === "system" ? <span className="protected-project-note"><ShieldCheck size={13} />与初始化发现范围同步 · 不可删除</span> : <>{item.status !== "active" && <button className="text-button" onClick={() => void relinkProject(item)}><FolderOpen size={13} />重新定位</button>}<button className="text-button danger" onClick={() => void forgetProject(item)}><Trash2 size={13} />仅从列表移除</button></>}</div>
         </article>)}
       </section>
       {projectsLoading && <div className="history-empty"><LoaderCircle className="spin" size={18} /><span>正在读取项目列表…</span></div>}
       {!projectsLoading && !projects.length && <div className="project-placeholder compact-placeholder"><Link2 size={25} /><h3>还没有可用的项目</h3><p>检测到 Agent 全局 Skills 目录后会自动显示系统项目；也可以添加普通代码项目并按需挂载 Skills。</p></div>}
+      <AgentTargetRegistryPanel
+        targets={agentTargets}
+        busy={busy}
+        onAdd={addAgentTarget}
+        onRemove={removeAgentTarget}
+        onChooseDirectory={chooseAgentTargetDirectory}
+      />
       <ProjectActivationMatrix
         matrix={matrix}
         query={matrixQuery}
@@ -2311,7 +2362,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
         <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> {status?.project_kind === "system" ? "Agent 全局映射" : "项目与发现方式"}</div>{status?.project_kind === "system" ? <span className="badge neutral">系统项目</span> : <button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button>}</div>
         <h2>{status?.project_kind === "system" ? "管理 Agent 全局 Skills" : "按项目选择 Skills"}</h2><p className="muted">{status?.project_kind === "system" ? "系统项目始终保留；可以卸载受管 Skill，外部已有内容默认只读。" : "按需求检索或按分类浏览；只有被勾选的 Skill 才会创建软链接。"}</p>
         {status && status.project_kind === "project" && !status.managed && <div className="project-setup-notice"><Sparkles size={16} /><span>这是尚未接入 Adaptive Skills 的普通项目。首次应用 Skill 后会创建 manifest，并加入项目历史列表。</span></div>}
-        {status?.project_kind === "system" && <div className="project-setup-notice"><ShieldCheck size={16} /><span>此映射来自初始化的 Discovery Scope，与本机 Agent 全局目录保持一致，不能从项目列表移除或重新定位。</span></div>}
+        {status?.project_kind === "system" && <div className="project-setup-notice">{status.provisioned ? <ShieldCheck size={16} /> : <Sparkles size={16} />}<span>{status.provisioned ? "此映射来自初始化的 Discovery Scope，与本机 Agent 全局目录保持一致，不能从项目列表移除或重新定位。" : "已检测到此 Agent，但全局 Skills 目录尚未创建；首次安装 Skill 时会自动安全创建。"}</span></div>}
         <label className="input-field"><span>{status?.project_kind === "system" ? "Agent 全局 Skills 目录" : "项目目录"}</span><div className={status?.project_kind === "system" ? "input-with-button locked" : "input-with-button"}><input value={project} readOnly={status?.project_kind === "system"} onChange={(event) => { setProject(event.target.value); setPlan(null); setSelected(new Set()); }} placeholder="/path/to/project" />{status?.project_kind !== "system" && <button type="button" onClick={chooseProject}><FolderOpen size={17} /></button>}</div></label>
         <div className="input-field discovery-method-field"><span>查找方式</span><div className="discovery-method" role="group" aria-label="选择 Skill 查找方式"><button type="button" className={discoveryMode === "requirement" ? "active" : ""} aria-pressed={discoveryMode === "requirement"} onClick={() => changeDiscoveryMode("requirement")}><Search size={14} />需求检索</button><button type="button" className={discoveryMode === "category" ? "active" : ""} aria-pressed={discoveryMode === "category"} onClick={() => changeDiscoveryMode("category")}><Layers3 size={14} />分类浏览</button></div></div>
         {discoveryMode === "requirement" ? <label className="input-field"><span>项目需要什么能力？</span><textarea value={requirement} onChange={(event) => { setRequirement(event.target.value); setPlan(null); setSelected(new Set()); }} rows={5} placeholder="例如：根据技术方案制作结构清晰的中文演示文稿，并检查视觉一致性。" /></label> : <div className="category-browser"><div className="two-columns"><label className="input-field"><span>一级分类</span><select value={categoryL1} onChange={(event) => { setCategoryL1(event.target.value); setCategoryL2(""); }}><option value="" disabled>选择一级分类</option>{categoryLevelOnes.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.count}</option>)}</select></label><label className="input-field"><span>二级分类</span><select value={categoryL2} disabled={!categoryL1} onChange={(event) => setCategoryL2(event.target.value)}><option value="">全部二级分类</option>{categoryLevelTwos.map((item) => <option key={item.name} value={item.name}>{item.name} · {item.count}</option>)}</select></label></div><p className="category-auto-state">{!project.trim() ? "先选择项目目录，分类结果会显示在右侧" : planLoading ? <><LoaderCircle className="spin" size={13} />正在读取分类…</> : categoryL1 ? <><Check size={13} />分类变化后，右侧会自动更新</> : "当前目录还没有可浏览的分类"}</p></div>}
@@ -2531,6 +2582,8 @@ function ActivityToast({ label }: { label: string }) {
     "matrix-install": "正在为 Agent 安装受管 Skill 软链接…",
     "matrix-uninstall": "正在安全卸载 Agent 的受管 Skill…",
     "matrix-adopt": "正在将外部 Skill 关联为受管软链接…",
+    "agent-target-add": "正在保存自定义 Agent 目标…",
+    "agent-target-remove": "正在安全移除自定义 Agent 目标配置…",
     "profile-preview": "正在解析配置集与目标 Agent 的兼容性…",
     "profile-apply": "正在应用 Skill 配置集…",
     "profile-capture": "正在保存当前 Skill 组合…",

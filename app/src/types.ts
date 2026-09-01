@@ -564,8 +564,10 @@ export interface ProjectStatus {
   entries: ProjectEntryStatus[];
   clean: boolean;
   project_kind: "project" | "system";
-  system_scope: "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | null;
+  system_scope: string | null;
   protected: boolean;
+  detected: boolean;
+  provisioned: boolean;
   external_entries: ProjectExternalEntry[];
 }
 
@@ -606,9 +608,27 @@ export interface ProjectSummary {
   system_scope: "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode" | null;
   protected: boolean;
   external_count: number;
+  detected: boolean;
+  provisioned: boolean;
 }
 
-export type AgentTargetId = "agents" | "claude" | "codex" | "cursor" | "gemini" | "opencode";
+export type AgentTargetId = string;
+
+export interface CustomAgentTargetInput {
+  id: string;
+  name: string;
+  globalPath: string;
+  detectPath: string;
+  projectPath: string;
+}
+
+export interface AgentTargetRemovalResult {
+  deleted: boolean;
+  id: string;
+  label: string;
+  global_path: string;
+  filesystem_changed: false;
+}
 
 export interface AgentTarget {
   id: AgentTargetId;
@@ -617,12 +637,22 @@ export interface AgentTarget {
   global_path: string;
   project_path: string;
   exists: boolean;
+  detect_path: string;
+  detected: boolean;
   aliases: string[];
   preferred_rel_prefixes: string[];
+  supported_scopes: Array<"global" | "project">;
+  supports_global: boolean;
+  supports_project: boolean;
+  sync_modes: Array<"symlink" | "copy">;
+  default_sync_mode: "symlink" | "copy";
+  global_group: string;
+  project_group: string;
+  built_in: boolean;
 }
 
 export interface ActivationTarget extends AgentTarget {
-  status: "available" | "unavailable" | "invalid";
+  status: "available" | "pending" | "unavailable" | "invalid";
   problem: string | null;
 }
 

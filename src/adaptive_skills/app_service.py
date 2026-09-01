@@ -12,7 +12,7 @@ from .evaluation import EvaluationService
 from .source_removal import SourceRemovalService
 
 
-APP_CONTRACT_VERSION = 9
+APP_CONTRACT_VERSION = 10
 RISK_LEVELS = ("none", "low", "medium", "high", "critical")
 
 
@@ -97,6 +97,7 @@ class AppService:
                 "llm_review": True,
                 "audit_review": True,
                 "project_registry": True,
+                "custom_agent_targets": True,
                 "bootstrap": True,
             },
         }

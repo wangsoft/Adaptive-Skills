@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adaptive-skills-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Create Python environment
+        run: python3 -m venv .venv
+      - name: Install Python dependencies
+        run: .venv/bin/python -m pip install -e ".[dev]"
+      - name: Install desktop dependencies
+        working-directory: app
+        run: npm ci
+      - name: Verify release contract
+        run: .venv/bin/python scripts/check_release_contract.py
+      - name: Test Python core
+        run: .venv/bin/python -m unittest discover -s tests -q
+      - name: Test desktop frontend
+        working-directory: app
+        run: npm test -- --run
+      - name: Build desktop frontend
+        working-directory: app
+        run: npm run build
+      - name: Test Tauri bridge
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml
+
+  bundle-smoke:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: quality
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+      - name: Create Python environment
+        run: python3 -m venv .venv
+      - name: Install packaging dependencies
+        run: .venv/bin/python -m pip install -e ".[desktop]"
+      - name: Install desktop dependencies
+        working-directory: app
+        run: npm ci
+      - name: Build app and DMG
+        working-directory: app
+        run: npm run build:dmg
+      - name: Verify packaged core
+        run: .venv/bin/python scripts/verify_desktop_bundle.py

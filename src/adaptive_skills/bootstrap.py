@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .agent_scopes import default_agent_roots
+from .agent_targets import CustomAgentTargetService
 from .config import Settings
 from .database import Database, path_is_within
 from .errors import ValidationError
@@ -151,15 +152,26 @@ def _assert_copyable_tree(root: Path) -> None:
 
 
 class BootstrapService:
-    def __init__(self, settings: Settings, database: Database | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        database: Database | None = None,
+        *,
+        home: Path | None = None,
+    ):
         self.settings = settings
         self.database = database or Database(settings)
         self.sources = SourceManager(settings, self.database)
         self.scanner = CatalogScanner(settings, self.database)
+        self.agent_targets = CustomAgentTargetService(
+            settings, self.database, home=home
+        )
 
-    @staticmethod
-    def default_roots() -> list[dict[str, Any]]:
-        return default_agent_roots()
+    def default_roots(self) -> list[dict[str, Any]]:
+        return [
+            *default_agent_roots(self.agent_targets.home),
+            *self.agent_targets.list_custom(),
+        ]
 
     def status(self) -> dict[str, Any]:
         known = self.sources.list()
