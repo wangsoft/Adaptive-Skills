@@ -10,17 +10,16 @@
 
 ### 管理理念
 
-Skill 不应该全部塞进全局上下文。Adaptive Skills 将 `~/skills` 作为本地受管仓库：统一收集、扫描和评测 Skill，再按项目或 Agent 的实际需求建立软链接。来源始终可追踪，项目只加载需要的能力，已有文件默认不会被覆盖。
+Skill 不应该全部塞进全局上下文。Adaptive Skills 以 `~/skills` 为本地受管仓库，统一收集、扫描和评测，再按项目或 Agent 的实际需求挂载能力。来源可追踪，已有文件默认不覆盖。
 
 ### 核心能力
 
-- 管理多个 Git 来源，支持发现、克隆、批量更新、本地维护和安全移除。
-- 扫描 `SKILL.md`、YAML frontmatter、格式兼容性和风险信号。
+- 发现、克隆、批量更新并安全移除多个 Git 来源。
+- 解析 `SKILL.md` 与 YAML frontmatter，区分格式兼容性、能力提示和已确认风险。
 - 使用 SQLite 建立可检索目录，并通过 Codex CLI、Claude Code 或 OpenAI 兼容 API 进行智能分类与评分。
 - 按需求或固定分类推荐 Skill，解释匹配原因、质量和风险。
-- 为普通项目和 Agent 全局目录创建受管理软链接；实体副本可在备份后迁移为软链接。
-- 记录来源更新、LLM 评测和项目变更历史。
-- 界面支持简体中文与英文，可随时切换并记住选择。
+- 为项目和 Agent 创建受管条目：优先软链接，不支持时回退为受管副本；实体副本可备份后迁移。
+- 保存来源更新、LLM 评测和项目变更历史；界面支持简体中文与英文。
 
 ### 界面
 
@@ -34,37 +33,22 @@ Skill 不应该全部塞进全局上下文。Adaptive Skills 将 `~/skills` 作�
 
 ### 下载与安装
 
-当前已发布的 **v0.1.16** 仅提供 **macOS Apple Silicon（arm64）**：
+当前发布的 **v0.1.16** 仅提供 **macOS Apple Silicon（arm64）**：
 [下载 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg)。
 该构建使用临时签名，**未经过 Apple 公证**。
 
 ```bash
 cd ~/Downloads
 shasum -a 256 Adaptive-Skills_0.1.16_aarch64.dmg
-# 预期值：4f4be9b68fbd7fe9d2ef20085de8d280df49346229817fef11c74f85704ba706
+# 预期：4f4be9b68fbd7fe9d2ef20085de8d280df49346229817fef11c74f85704ba706
 open Adaptive-Skills_0.1.16_aarch64.dmg
-```
-
-将 App 拖入 `/Applications`，解除隔离后启动：
-
-```bash
 xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
 
-从下一个版本标签开始，[GitHub Releases](https://github.com/wangsoft/Adaptive-Skills/releases)
-将通过原生 Runner 同时提供：
+代码已加入签名的应用内升级流程，计划随下一次通过验证的 Release 生效：应用每天至多检查一次，发现新版本后仍需用户确认才会安装并重启。Linux DEB/RPM 继续通过系统包管理器更新。**v0.1.16 不含升级器，首次升级仍需手动下载。**
 
-| 平台 | 架构 | 发布包 |
-| --- | --- | --- |
-| macOS 15 | Apple Silicon（arm64） | DMG、`.app.zip` |
-| Windows | x64 | NSIS `setup.exe` |
-| Linux（Ubuntu 22.04） | x64 | AppImage、DEB |
-
-新的多平台 Release 会同时提供 `SHA256SUMS`。安装前请核对对应文件的
-SHA-256；Windows 安装包当前未签名，macOS 构建仍使用临时签名且未公证。
-Linux AppImage 需先执行 `chmod +x <文件名>.AppImage`，DEB 可通过
-`sudo apt install ./<文件名>.deb` 安装。
+后续 Release 计划由原生 Runner 验证 macOS arm64 DMG、Windows x64 NSIS、Linux x64 AppImage/DEB，并附 `SHA256SUMS`。Windows 包当前未签名；macOS 仍为临时签名且未公证。
 
 ### 本地开发
 
@@ -83,17 +67,16 @@ npm run tauri -- dev
 
 ### Management philosophy
 
-Skills should not all live in the global context. Adaptive Skills treats `~/skills` as a locally managed library: collect, scan, and evaluate each Skill once, then symlink only the capabilities a project or agent actually needs. Provenance remains visible, and existing files are preserved by default.
+Skills should not all live in the global context. Adaptive Skills treats `~/skills` as a locally managed library: collect, scan, and evaluate once, then mount only what each project or agent needs. Provenance stays visible, and existing files are preserved by default.
 
 ### Core capabilities
 
-- Manage multiple Git sources with discovery, cloning, batch updates, local maintenance, and safe removal.
-- Scan `SKILL.md`, YAML frontmatter, format compatibility, and risk signals.
+- Discover, clone, batch-update, and safely remove multiple Git sources.
+- Parse `SKILL.md` and YAML frontmatter while separating format compatibility, capability hints, and confirmed risks.
 - Build a searchable SQLite catalog and evaluate Skills through Codex CLI, Claude Code, or an OpenAI-compatible API.
 - Recommend Skills by requirement or fixed taxonomy, with explanations for relevance, quality, and risk.
-- Create managed symlinks for projects and agent-global directories; migrate physical copies after making a backup.
-- Keep histories for source updates, LLM evaluations, and project changes.
-- Switch between Simplified Chinese and English; the app remembers the selection.
+- Create managed project and agent entries: prefer symlinks, fall back to managed copies where required, and back up physical copies before migration.
+- Keep source-update, LLM-evaluation, and project histories; switch between Simplified Chinese and English.
 
 ### Interface
 
@@ -107,7 +90,7 @@ Skills should not all live in the global context. Adaptive Skills treats `~/skil
 
 ### Download and install
 
-The currently published **v0.1.16** release contains only the
+The current **v0.1.16** release contains only the
 **macOS Apple Silicon (arm64)** build:
 [download the DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg).
 It uses an ad-hoc signature and is **not notarized by Apple**.
@@ -117,30 +100,13 @@ cd ~/Downloads
 shasum -a 256 Adaptive-Skills_0.1.16_aarch64.dmg
 # Expected: 4f4be9b68fbd7fe9d2ef20085de8d280df49346229817fef11c74f85704ba706
 open Adaptive-Skills_0.1.16_aarch64.dmg
-```
-
-Drag the app into `/Applications`, remove quarantine, and launch it:
-
-```bash
 xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
 
-Starting with the next version tag,
-[GitHub Releases](https://github.com/wangsoft/Adaptive-Skills/releases) will
-publish native packages for all three platforms:
+The code now includes a signed in-app update flow planned for the next verified Release. The app checks at most once per day and still requires explicit approval before installing and restarting. Linux DEB/RPM installs remain on the system package-manager path. **v0.1.16 does not contain the updater, so its first upgrade remains manual.**
 
-| Platform | Architecture | Packages |
-| --- | --- | --- |
-| macOS 15 | Apple Silicon (arm64) | DMG, `.app.zip` |
-| Windows | x64 | NSIS `setup.exe` |
-| Linux (Ubuntu 22.04) | x64 | AppImage, DEB |
-
-Each new multi-platform release also includes `SHA256SUMS`. Verify the matching
-SHA-256 before installation. Windows installers are currently unsigned; macOS
-builds remain ad-hoc signed and unnotarized. Run `chmod +x <name>.AppImage`
-before launching an AppImage, or install a DEB with
-`sudo apt install ./<name>.deb`.
+Future Releases are planned to verify macOS arm64 DMG, Windows x64 NSIS, and Linux x64 AppImage/DEB packages on native runners, with `SHA256SUMS`. Windows packages are currently unsigned; macOS builds remain ad-hoc signed and unnotarized.
 
 ### Run locally
 

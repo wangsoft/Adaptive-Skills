@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +13,7 @@ from adaptive_skills.app_service import APP_CONTRACT_VERSION, AppService
 from adaptive_skills.config import Settings
 from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.sources import SourceManager
-from tests.helpers import commit_all, init_repo, write_skill
+from tests.helpers import commit_all, init_repo, remove_tree, write_skill
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -117,7 +116,7 @@ class AppContractTests(unittest.TestCase):
                 "UPDATE sources SET url = ?",
                 ("https://github.com/example/sample-source.git",),
             )
-        shutil.rmtree(source_path)
+        remove_tree(source_path)
 
         source = AppService(self.settings).snapshot()["sources"][0]
 

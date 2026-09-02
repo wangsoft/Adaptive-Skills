@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Adaptive Skills",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "identifier": "com.adaptive-skills.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -43,6 +44,14 @@
     "shortDescription": "Curate and link project-scoped Agent Skills",
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1RTNBRUI2NDk1N0VCMTAKUldRUTYxZEp0cTdqcFNOSDdvd0xHOXdwaFZuTDNqQzFnWjZBVFpCZnhUdjJQWlh6My9iTE9RMnQK",
+      "endpoints": [
+        "https://github.com/wangsoft/Adaptive-Skills/releases/latest/download/latest.json"
+      ]
     }
   }
 }

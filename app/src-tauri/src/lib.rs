@@ -304,6 +304,12 @@ async fn save_llm_profile(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             run_adaptive_command,
             save_llm_profile

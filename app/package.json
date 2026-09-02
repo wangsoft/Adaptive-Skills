@@ -1,7 +1,7 @@
 {
   "name": "adaptive-skills-desktop",
   "private": true,
-  "version": "0.1.16",
+  "version": "0.1.17",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,6 +18,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "lucide-react": "1.28.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -31,5 +33,8 @@
     "typescript": "7.0.2",
     "vite": "8.2.0",
     "vitest": "4.1.10"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
   }
 }

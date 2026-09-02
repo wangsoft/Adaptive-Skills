@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
@@ -54,6 +55,7 @@ def _run(core: Path, library: Path, *arguments: str) -> object:
         cwd=library.parent,
         env=runtime_environment(library.parent / "home"),
         text=True,
+        encoding="utf-8",
         timeout=60,
     )
     return json.loads(result.stdout)
@@ -156,6 +158,39 @@ def bundle_artifacts(root: Path, platform: str, release_version: str) -> list[Pa
             ),
         ]
     raise RuntimeError(f"Unsupported desktop platform: {platform}")
+
+
+def updater_artifacts(root: Path, platform: str, release_version: str) -> list[Path]:
+    bundle = root / "app" / "src-tauri" / "target" / "release" / "bundle"
+    version = re.escape(release_version)
+    if platform == "darwin":
+        directory = bundle / "macos"
+        archive_pattern = re.compile(r".+\.app\.tar\.gz")
+    elif platform == "win32":
+        directory = bundle / "nsis"
+        archive_pattern = re.compile(rf".+_{version}_[A-Za-z0-9._-]+-setup\.exe")
+    elif platform == "linux":
+        directory = bundle / "appimage"
+        archive_pattern = re.compile(rf".+_{version}_[A-Za-z0-9._-]+\.AppImage")
+    else:
+        raise RuntimeError(f"Unsupported desktop platform: {platform}")
+    archives = sorted(
+        path
+        for path in directory.glob("*")
+        if path.is_file() and archive_pattern.fullmatch(path.name)
+    )
+    if len(archives) != 1:
+        raise RuntimeError(
+            f"Expected one signed {platform} updater archive, found {len(archives)} in {directory}"
+        )
+    archive = _require_regular_file(archives[0], directory, "updater archive")
+    signature = _require_regular_file(
+        archive.with_name(archive.name + ".sig"),
+        directory,
+        "updater signature",
+    )
+    _read_signature(signature)
+    return [archive, signature]
 
 
 def find_packaged_core(extracted: Path, platform: str) -> Path:
@@ -428,18 +463,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _read_signature(path: Path) -> str:
+    if path.stat().st_size > 32 * 1024:
+        raise RuntimeError(f"Updater signature is unexpectedly large: {path}")
+    signature = path.read_text(encoding="utf-8").strip()
+    if not signature or "\0" in signature:
+        raise RuntimeError(f"Updater signature is empty or malformed: {path}")
+    return signature
+
+
 def _expected_asset_patterns(platform: str, release_version: str) -> list[re.Pattern[str]]:
     version = re.escape(release_version)
     if platform == "darwin":
         return [
             re.compile(rf"Adaptive Skills_{version}_[A-Za-z0-9._-]+\.dmg"),
-            re.compile(rf"Adaptive Skills_{version}_macos\.app\.zip"),
+            re.compile(r".+\.app\.tar\.gz"),
+            re.compile(r".+\.app\.tar\.gz\.sig"),
         ]
     if platform == "win32":
-        return [re.compile(rf"Adaptive Skills_{version}_[A-Za-z0-9._-]+-setup\.exe")]
+        return [
+            re.compile(rf"Adaptive Skills_{version}_[A-Za-z0-9._-]+-setup\.exe"),
+            re.compile(rf"Adaptive Skills_{version}_[A-Za-z0-9._-]+-setup\.exe\.sig"),
+        ]
     if platform == "linux":
         return [
             re.compile(rf".+_{version}_[A-Za-z0-9._-]+\.AppImage"),
+            re.compile(rf".+_{version}_[A-Za-z0-9._-]+\.AppImage\.sig"),
             re.compile(rf".+_{version}_[A-Za-z0-9._-]+\.deb"),
         ]
     raise RuntimeError(f"Unsupported desktop platform: {platform}")
@@ -465,39 +514,26 @@ def _validate_asset_names(
 
 def stage_verified_assets(
     artifacts: list[Path],
+    updater: list[Path],
     platform: str,
     release_version: str,
     destination: Path,
-    *,
-    mac_app: Path | None = None,
 ) -> None:
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Verified asset staging directory already exists: {destination}")
     destination.mkdir(parents=True)
     staged: list[Path] = []
-    for artifact in artifacts:
+    for artifact in [*artifacts, *updater]:
         _require_regular_file(artifact, artifact.parent, "verified package")
         if "\n" in artifact.name or "\r" in artifact.name:
             raise RuntimeError(f"Unsafe verified package name: {artifact.name!r}")
         target = destination / artifact.name
         if target.exists():
+            if _sha256(target) == _sha256(artifact):
+                continue
             raise RuntimeError(f"Duplicate verified package name: {artifact.name}")
         shutil.copy2(artifact, target)
         staged.append(target)
-    if platform == "darwin":
-        if mac_app is None or not mac_app.is_dir() or mac_app.is_symlink():
-            raise RuntimeError("The verified macOS app is missing")
-        _assert_safe_core_tree(mac_app, mac_app.parent)
-        archive_base = destination / f"Adaptive Skills_{release_version}_macos.app"
-        archived = Path(
-            shutil.make_archive(
-                str(archive_base),
-                "zip",
-                root_dir=mac_app.parent,
-                base_dir=mac_app.name,
-            )
-        )
-        staged.append(archived)
     names = [path.name for path in staged]
     _validate_asset_names(names, platform, release_version)
     manifest = {
@@ -524,6 +560,7 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
     platforms: set[str] = set()
     verified: list[Path] = []
     names: set[str] = set()
+    update_platforms: dict[str, tuple[Path, Path]] = {}
     for manifest_path in manifests:
         _require_regular_file(manifest_path, inputs, "verified asset manifest")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -567,12 +604,50 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
                 raise RuntimeError(f"Verified release asset digest mismatch: {asset}")
             names.add(name)
             verified.append(asset)
+        updater_suffix = {
+            "darwin": ".app.tar.gz",
+            "win32": "-setup.exe",
+            "linux": ".AppImage",
+        }[platform]
+        updater_archives = [
+            manifest_path.parent / name
+            for name in manifest_names
+            if name.endswith(updater_suffix)
+        ]
+        if len(updater_archives) != 1:
+            raise RuntimeError(f"Expected one updater archive in {manifest_path.parent}")
+        updater_archive = updater_archives[0]
+        updater_signature = updater_archive.with_name(updater_archive.name + ".sig")
+        if updater_signature.name not in manifest_names:
+            raise RuntimeError(f"Updater signature is not manifested: {updater_signature}")
+        update_platforms[platform] = (updater_archive, updater_signature)
         platforms.add(platform)
     if platforms != {"darwin", "win32", "linux"}:
         raise RuntimeError(f"Missing verified platform assets: {platforms}")
     output.mkdir(parents=True)
     for asset in verified:
         shutil.copy2(asset, output / asset.name)
+    target_names = {
+        "darwin": "darwin-aarch64",
+        "win32": "windows-x86_64",
+        "linux": "linux-x86_64",
+    }
+    base_url = f"https://github.com/wangsoft/Adaptive-Skills/releases/download/v{release_version}/"
+    latest = {
+        "version": release_version,
+        "notes": f"Adaptive Skills v{release_version}",
+        "platforms": {
+            target_names[platform]: {
+                "signature": _read_signature(signature),
+                "url": base_url + urllib.parse.quote(archive.name),
+            }
+            for platform, (archive, signature) in sorted(update_platforms.items())
+        },
+    }
+    output.joinpath("latest.json").write_text(
+        json.dumps(latest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     checksum_lines = [
         f"{_sha256(path)}  {path.name}"
         for path in sorted(output.iterdir(), key=lambda item: item.name)
@@ -608,6 +683,7 @@ def main(arguments: list[str] | None = None) -> int:
     release_version = tauri_config["version"]
     platform = sys.platform
     artifacts = bundle_artifacts(root, platform, release_version)
+    updater = updater_artifacts(root, platform, release_version)
     staging = root / "app" / "src-tauri" / "target" / "release" / "verified-assets"
     if staging.is_symlink() or (staging.exists() and not staging.is_dir()):
         raise RuntimeError(f"Unsafe verified asset staging path: {staging}")
@@ -620,13 +696,12 @@ def main(arguments: list[str] | None = None) -> int:
         cores = _materialize_cores(artifacts, platform, release_version, Path(raw))
         for core in cores:
             _verify_core_contract(root, core, release_version)
-        mac_app = cores[0].parents[3] if platform == "darwin" else None
         stage_verified_assets(
             artifacts,
+            updater,
             platform,
             release_version,
             staging,
-            mac_app=mac_app,
         )
 
     print("verified bundled core: " + ", ".join(str(path) for path in artifacts))

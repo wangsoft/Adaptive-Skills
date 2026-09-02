@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Default permissions for the Adaptive Skills desktop window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

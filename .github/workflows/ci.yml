@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: "0.1.16"
+  RELEASE_VERSION: "0.1.17"
+  PYTHONUTF8: "1"
 
 concurrency:
   group: adaptive-skills-${{ github.workflow }}-${{ github.ref }}
@@ -102,6 +103,8 @@ jobs:
         run: npm ci
       - name: Build native desktop packages
         working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }}
       - name: Verify packaged core
         run: python scripts/verify_desktop_bundle.py
@@ -137,13 +140,28 @@ jobs:
         run: |
           test "$GITHUB_REF_NAME" = "v${RELEASE_VERSION}"
           tag="${GITHUB_REF_NAME}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Refusing to reuse existing release $tag" >&2
+          existing="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [ "$existing" = "true" ]; then
+            gh release delete "$tag" --yes
+          elif [ "$existing" = "false" ]; then
+            echo "Refusing to replace published release $tag" >&2
             exit 1
           fi
+          created=0
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ] && [ "$created" = "1" ]; then
+              gh release delete "$tag" --yes || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
           gh release create "$tag" --verify-tag --draft --generate-notes --title "Adaptive Skills $tag"
+          created=1
           gh release upload "$tag" release-assets/*
           expected="$(sed 's/^[0-9a-f]\{64\}  //' release-assets/SHA256SUMS; printf '%s\n' SHA256SUMS)"
           actual="$(gh release view "$tag" --json assets --jq '.assets[].name')"
           test "$(printf '%s\n' "$actual" | sort)" = "$(printf '%s\n' "$expected" | sort)"
           gh release edit "$tag" --draft=false
+          created=0
+          trap - EXIT

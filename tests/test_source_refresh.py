@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-import shutil
 from pathlib import Path
 
 from adaptive_skills.catalog import Catalog
@@ -13,7 +12,7 @@ from adaptive_skills.source_removal import SourceRemovalService
 from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.sources import SourceManager
 
-from tests.helpers import commit_all, init_repo, write_skill
+from tests.helpers import commit_all, init_repo, remove_tree, write_skill
 from tests.test_cli import run_cli
 
 
@@ -35,7 +34,7 @@ class SourceRefreshServiceTests(unittest.TestCase):
                 cleanup_references=True,
                 expected_digest=removal["preview_digest"],
             )
-            shutil.rmtree(original)
+            remove_tree(original)
             replacement = init_repo(library / "shared")
             write_skill(replacement, "new-skill", "Different repository.")
             commit_all(replacement, "new")

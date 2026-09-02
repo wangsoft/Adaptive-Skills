@@ -10,7 +10,9 @@ from typing import Any
 import yaml
 
 
-RELEASE_VERSION = "0.1.16"
+RELEASE_VERSION = "0.1.17"
+UPDATER_PUBLIC_KEY = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1RTNBRUI2NDk1N0VCMTAKUldRUTYxZEp0cTdqcFNOSDdvd0xHOXdwaFZuTDNqQzFnWjZBVFpCZnhUdjJQWlh6My9iTE9RMnQK"
+UPDATER_ENDPOINT = "https://github.com/wangsoft/Adaptive-Skills/releases/latest/download/latest.json"
 CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 SETUP_PYTHON_ACTION = "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
 SETUP_NODE_ACTION = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38"
@@ -85,6 +87,11 @@ def validate_workflow(workflow: object, release_version: str) -> None:
         release_version,
     )
     _assert_equal(
+        "GitHub Actions UTF-8 Python mode",
+        workflow.get("env", {}).get("PYTHONUTF8"),
+        "1",
+    )
+    _assert_equal(
         "GitHub Actions default permission",
         workflow.get("permissions"),
         {"contents": "read"},
@@ -150,6 +157,11 @@ def validate_workflow(workflow: object, release_version: str) -> None:
         "native bundle command",
         build.get("run"),
         "npm run tauri -- build --ci --bundles ${{ matrix.bundles }}",
+    )
+    _assert_equal(
+        "native bundle signing secret",
+        build.get("env", {}).get("TAURI_SIGNING_PRIVATE_KEY"),
+        "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
     )
     _assert_equal(
         "packaged core verifier",
@@ -225,16 +237,31 @@ def validate_workflow(workflow: object, release_version: str) -> None:
         raise RuntimeError("release tag version check changed")
     expected_publish = r"""test "$GITHUB_REF_NAME" = "v${RELEASE_VERSION}"
 tag="${GITHUB_REF_NAME}"
-if gh release view "$tag" >/dev/null 2>&1; then
-  echo "Refusing to reuse existing release $tag" >&2
+existing="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+if [ "$existing" = "true" ]; then
+  gh release delete "$tag" --yes
+elif [ "$existing" = "false" ]; then
+  echo "Refusing to replace published release $tag" >&2
   exit 1
 fi
+created=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ "$created" = "1" ]; then
+    gh release delete "$tag" --yes || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 gh release create "$tag" --verify-tag --draft --generate-notes --title "Adaptive Skills $tag"
+created=1
 gh release upload "$tag" release-assets/*
 expected="$(sed 's/^[0-9a-f]\{64\}  //' release-assets/SHA256SUMS; printf '%s\n' SHA256SUMS)"
 actual="$(gh release view "$tag" --json assets --jq '.assets[].name')"
 test "$(printf '%s\n' "$actual" | sort)" = "$(printf '%s\n' "$expected" | sort)"
-gh release edit "$tag" --draft=false"""
+gh release edit "$tag" --draft=false
+created=0
+trap - EXIT"""
     if publish_command != expected_publish:
         raise RuntimeError("release exact asset publication contract changed")
 
@@ -258,6 +285,7 @@ def main() -> int:
     package = _json(root / "app" / "package.json")
     package_lock = _json(root / "app" / "package-lock.json")
     tauri = _json(root / "app" / "src-tauri" / "tauri.conf.json")
+    capabilities = _json(root / "app" / "src-tauri" / "capabilities" / "default.json")
     cargo = _toml(root / "app" / "src-tauri" / "Cargo.toml")
     cargo_lock = _toml(root / "app" / "src-tauri" / "Cargo.lock")
     project = _toml(root / "pyproject.toml")
@@ -279,6 +307,31 @@ def main() -> int:
     versions["app/src-tauri/Cargo.lock"] = desktop_package["version"]
     for label, version in versions.items():
         _assert_equal(label, version, RELEASE_VERSION)
+
+    _assert_equal(
+        "Tauri updater artifacts",
+        tauri.get("bundle", {}).get("createUpdaterArtifacts"),
+        True,
+    )
+    _assert_equal(
+        "Tauri updater public key",
+        tauri.get("plugins", {}).get("updater", {}).get("pubkey"),
+        UPDATER_PUBLIC_KEY,
+    )
+    _assert_equal(
+        "Tauri updater endpoint",
+        tauri.get("plugins", {}).get("updater", {}).get("endpoints"),
+        [UPDATER_ENDPOINT],
+    )
+    required_permissions = {"updater:default", "process:allow-restart"}
+    if not required_permissions.issubset(set(capabilities.get("permissions", []))):
+        raise RuntimeError("Tauri updater permissions are incomplete")
+    for dependency in ("@tauri-apps/plugin-updater", "@tauri-apps/plugin-process"):
+        if dependency not in package.get("dependencies", {}):
+            raise RuntimeError(f"app/package.json is missing {dependency}")
+    for dependency in ("tauri-plugin-updater", "tauri-plugin-process"):
+        if dependency not in cargo.get("dependencies", {}):
+            raise RuntimeError(f"app/src-tauri/Cargo.toml is missing {dependency}")
 
     expected_scripts = {
         "build:macos": "tauri build --ci --bundles app,dmg",

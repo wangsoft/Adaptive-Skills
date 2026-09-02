@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import shutil
+import stat
 from pathlib import Path
 
 
@@ -45,3 +47,12 @@ def commit_all(repo: Path, message: str = "fixtures") -> str:
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", message)
     return git(repo, "rev-parse", "HEAD")
+
+
+def remove_tree(path: str | Path) -> None:
+    def make_writable(function, target, _error):
+        target_path = Path(target)
+        target_path.chmod(target_path.stat().st_mode | stat.S_IWRITE)
+        function(target)
+
+    shutil.rmtree(path, onexc=make_writable)

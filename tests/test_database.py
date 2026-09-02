@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 import stat
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 from adaptive_skills.config import Settings
@@ -12,14 +14,24 @@ from adaptive_skills.errors import ValidationError
 from adaptive_skills.sources import SourceManager
 
 
+@contextmanager
+def sqlite_connection(path: Path):
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 class DatabaseMigrationTests(unittest.TestCase):
     def test_existing_catalog_gains_remote_policy_without_losing_source(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             settings = Settings.load(Path(raw) / "library")
             settings.ensure()
-            connection = sqlite3.connect(settings.database)
-            connection.executescript(
-                """
+            with sqlite_connection(settings.database) as connection:
+                connection.executescript(
+                    """
                 CREATE TABLE sources (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL UNIQUE,
@@ -38,10 +50,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                     'old-source', 'old-source', '/tmp/old-source',
                     'registered', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
                 );
-                """
-            )
-            connection.commit()
-            connection.close()
+                    """
+                )
 
             manager = SourceManager(settings)
             migrated = manager.get("old-source")
@@ -62,7 +72,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 )
             )
             self.assertEqual(len(backups), 1)
-            with sqlite3.connect(backups[0]) as backup:
+            with sqlite_connection(backups[0]) as backup:
                 preserved = backup.execute(
                     "SELECT name FROM sources WHERE id = 'old-source'"
                 ).fetchone()
@@ -119,7 +129,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             settings = Settings.load(Path(raw) / "library")
             settings.ensure()
-            with sqlite3.connect(settings.database) as connection:
+            with sqlite_connection(settings.database) as connection:
                 connection.executescript(
                     """
                     CREATE TABLE schema_meta (
@@ -136,7 +146,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValidationError, "newer"):
                 Database(settings).connect()
 
-            with sqlite3.connect(settings.database) as connection:
+            with sqlite_connection(settings.database) as connection:
                 version = connection.execute(
                     "SELECT value FROM schema_meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
@@ -149,7 +159,7 @@ class DatabaseMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             settings = Settings.load(Path(raw) / "library")
             settings.ensure()
-            with sqlite3.connect(settings.database) as connection:
+            with sqlite_connection(settings.database) as connection:
                 connection.executescript(
                     """
                     CREATE TABLE schema_meta (
@@ -182,7 +192,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertEqual(version, str(SCHEMA_VERSION))
             self.assertIsNotNone(custom_targets)
             self.assertEqual(len(backups), 1)
-            with sqlite3.connect(backups[0]) as backup:
+            with sqlite_connection(backups[0]) as backup:
                 backup_version = backup.execute(
                     "SELECT value FROM schema_meta WHERE key = 'schema_version'"
                 ).fetchone()[0]
@@ -196,13 +206,14 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertEqual(backup_version, "8")
             self.assertEqual(sentinel, "before-v9")
             self.assertIsNone(custom_targets)
-            self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(backups[0].stat().st_mode), 0o600)
 
     def test_malformed_catalog_version_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             settings = Settings.load(Path(raw) / "library")
             settings.ensure()
-            with sqlite3.connect(settings.database) as connection:
+            with sqlite_connection(settings.database) as connection:
                 connection.executescript(
                     """
                     CREATE TABLE schema_meta (

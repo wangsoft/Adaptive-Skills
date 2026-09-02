@@ -113,7 +113,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             if step.get("name") == "Publish one release after every platform passes"
         )
         publish["run"] = publish["run"].replace(
-            'echo "Refusing to reuse existing release $tag" >&2\n', ""
+            'echo "Refusing to replace published release $tag" >&2\n', ""
         )
         with self.assertRaisesRegex(RuntimeError, "exact asset publication"):
             contract.validate_workflow(workflow, contract.RELEASE_VERSION)

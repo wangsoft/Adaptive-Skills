@@ -19,7 +19,7 @@ from adaptive_skills.source_refresh import SourceRefreshService
 from adaptive_skills.source_removal import SourceRemovalService
 from adaptive_skills.sources import SourceManager
 
-from tests.helpers import commit_all, init_repo, write_skill
+from tests.helpers import commit_all, init_repo, remove_tree, write_skill
 from tests.test_cli import run_cli
 
 
@@ -229,7 +229,7 @@ class SourceRemovalServiceTests(unittest.TestCase):
 
         self.projects.unlink(project, skill_ids=[self.skill["id"]])
         clear = self.service.preview_forget(self.source["id"])
-        shutil.rmtree(project)
+        remove_tree(project)
         inaccessible = self.service.preview_forget(self.source["id"])
         self.assertEqual(len(inaccessible["inaccessible_projects"]), 1)
         with self.assertRaisesRegex(ConflictError, "cannot be inspected"):
@@ -249,7 +249,7 @@ class SourceRemovalServiceTests(unittest.TestCase):
             expected_digest=removal["preview_digest"],
         )
         self.assertTrue(self.service.list_removed()[0]["restorable"])
-        shutil.rmtree(self.repository)
+        remove_tree(self.repository)
         removed = self.service.list_removed()[0]
         self.assertFalse(removed["repository_exists"])
         self.assertFalse(removed["restorable"])

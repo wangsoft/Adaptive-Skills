@@ -41,6 +41,20 @@ def _is_link_like(path: Path) -> bool:
     return path.is_symlink() or bool(is_junction and is_junction())
 
 
+def _same_entry(left: Path, right: Path) -> bool:
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
+
+
+def _unlink_link_like(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+    else:
+        os.rmdir(path)
+
+
 def _symlinks_unavailable(error: OSError) -> bool:
     unsupported = {
         errno.EACCES,
@@ -1294,8 +1308,8 @@ class ProjectManager:
         if external_hash != source_hash and not replace_content:
             raise ConflictError("External Skill content does not exactly match the catalog Skill")
 
-        original_entry_type = "symlink" if destination.is_symlink() else "directory"
-        same_link = destination.is_symlink() and destination.resolve() == source
+        original_entry_type = "symlink" if _is_link_like(destination) else "directory"
+        same_link = _is_link_like(destination) and _same_entry(destination, source)
         backup_relative: str | None = None
         backup: Path | None = None
         if not same_link:
@@ -1311,7 +1325,7 @@ class ProjectManager:
             backup.parent.mkdir(parents=True, exist_ok=True)
             os.replace(destination, backup)
             try:
-                self._install(source, destination, "symlink")
+                actual_mode = self._install(source, destination, "auto")
             except Exception:
                 os.replace(backup, destination)
                 raise
@@ -1320,7 +1334,7 @@ class ProjectManager:
             "skill_id": skill["id"],
             "name": skill["name"],
             "path": entry_name,
-            "mode": "symlink",
+            "mode": "symlink" if same_link else actual_mode,
             "source_id": skill["source_id"],
             "source_name": skill["source_name"],
             "source_url": skill["source_url"],
@@ -1350,7 +1364,7 @@ class ProjectManager:
             skill_names=[skill["name"]],
             requirement=None,
             target=".",
-            modes=["symlink"],
+            modes=[entry["mode"]],
             backup_path=backup_relative,
             source_path=str(source),
             original_entry_type=original_entry_type,
@@ -1358,8 +1372,13 @@ class ProjectManager:
         try:
             _atomic_json(self.manifest_path(root), manifest)
         except Exception:
-            if not same_link and destination.is_symlink() and backup is not None:
-                destination.unlink()
+            if not same_link and _lexists(destination) and backup is not None:
+                if _is_link_like(destination):
+                    _unlink_link_like(destination)
+                elif destination.is_dir():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink()
                 os.replace(backup, destination)
             raise
         return {
@@ -1604,8 +1623,8 @@ class ProjectManager:
             return "copy"
         finally:
             if _lexists(temporary):
-                if temporary.is_symlink():
-                    temporary.unlink()
+                if _is_link_like(temporary):
+                    _unlink_link_like(temporary)
                 elif temporary.is_dir():
                     shutil.rmtree(temporary)
 
@@ -1634,11 +1653,10 @@ class ProjectManager:
             Path(catalog_skill["source_path"]) / catalog_skill["rel_path"]
         ).resolve()
         if entry.get("mode") == "symlink":
-            if not destination.is_symlink():
+            if not _is_link_like(destination):
                 result["state"] = "replaced"
                 return result
-            actual = (destination.parent / os.readlink(destination)).resolve()
-            if actual != source.resolve():
+            if not _same_entry(destination, source):
                 result["state"] = "replaced"
                 return result
             if not source.is_dir():
@@ -1648,7 +1666,7 @@ class ProjectManager:
             if current_hash != entry.get("installed_tree_hash"):
                 result["state"] = "source-drift"
             return result
-        if not destination.is_dir() or destination.is_symlink():
+        if not destination.is_dir() or _is_link_like(destination):
             result["state"] = "replaced"
             return result
         current_hash, _ = hash_skill_tree(destination)
@@ -1666,8 +1684,7 @@ class ProjectManager:
     def _remove_verified(
         self, destination: Path, entry: dict[str, Any], *, force: bool
     ) -> None:
-        if destination.is_symlink():
-            actual = (destination.parent / os.readlink(destination)).resolve()
+        if _is_link_like(destination):
             try:
                 skill = self.catalog.get_skill(entry["skill_id"], active_only=False)
                 expected = (Path(skill["source_path"]) / skill["rel_path"]).resolve()
@@ -1676,10 +1693,10 @@ class ProjectManager:
                     raise ConflictError(
                         f"Cannot verify managed symlink because its catalog skill is missing: {destination}"
                     )
-                expected = actual
-            if actual != expected and not force:
+                expected = destination
+            if not _same_entry(destination, expected) and not force:
                 raise ConflictError(f"Managed symlink target changed: {destination}")
-            destination.unlink()
+            _unlink_link_like(destination)
             return
         if destination.is_dir():
             current_hash, _ = hash_skill_tree(destination)

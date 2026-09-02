@@ -32,6 +32,7 @@ import {
 import { api } from "./api";
 import appIconUrl from "./assets/app-icon.svg";
 import { Localized, translate, useLanguage } from "./i18n";
+import UpdateCenter from "./UpdateCenter";
 import {
   AgentTargetRegistryPanel,
   ProjectActivationMatrix,
@@ -543,6 +544,8 @@ function App() {
             <FolderOpen size={14} /> 更换目录
           </button>
         </div>
+
+        <UpdateCenter />
 
         <div className="language-switch" role="group" aria-label="界面语言">
           <button className={language === "zh-CN" ? "active" : ""} onClick={() => setLanguage("zh-CN")} aria-label={language === "zh-CN" ? "中文" : "Chinese"} aria-pressed={language === "zh-CN"}>ZH</button>

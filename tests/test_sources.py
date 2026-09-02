@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +11,7 @@ from adaptive_skills.scanner import CatalogScanner
 from adaptive_skills.source_removal import SourceRemovalService
 from adaptive_skills.sources import SourceManager
 
-from tests.helpers import commit_all, init_repo, write_skill
+from tests.helpers import commit_all, init_repo, remove_tree, write_skill
 
 
 class SourceManagerTests(unittest.TestCase):
@@ -48,7 +47,7 @@ class SourceManagerTests(unittest.TestCase):
             Catalog(settings).annotate(
                 original_skill["id"], score=8.0, score_source="smart"
             )
-            shutil.rmtree(original["local_path"])
+            remove_tree(original["local_path"])
 
             recovered = manager.add(origin.as_uri(), name="managed-skills")
             scan = CatalogScanner(settings).scan(recovered["id"])[0]
@@ -70,7 +69,7 @@ class SourceManagerTests(unittest.TestCase):
             settings = Settings.load(root / "library")
             manager = SourceManager(settings)
             source = manager.register(repository, url=repository.as_uri())
-            shutil.rmtree(repository)
+            remove_tree(repository)
 
             with self.assertRaisesRegex(ConflictError, "outside the managed Skill library"):
                 manager.add(source["url"])
@@ -130,7 +129,7 @@ class SourceManagerTests(unittest.TestCase):
                 cleanup_references=True,
                 expected_digest=removal["preview_digest"],
             )
-            shutil.rmtree(original["local_path"])
+            remove_tree(original["local_path"])
 
             replacement = manager.add(second.as_uri())
 
@@ -167,7 +166,7 @@ class SourceManagerTests(unittest.TestCase):
                 cleanup_references=True,
                 expected_digest=preview["preview_digest"],
             )
-            shutil.rmtree(original)
+            remove_tree(original)
             init_repo(original)
 
             result = manager.discover_detailed()

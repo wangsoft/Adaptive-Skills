@@ -20,10 +20,17 @@ class BundleVerifierTests(unittest.TestCase):
                 "win32": bundle / "nsis" / "Adaptive Skills_0.1.16_x64-setup.exe",
                 "linux-appimage": bundle / "appimage" / "Adaptive Skills_0.1.16_amd64.AppImage",
                 "linux-deb": bundle / "deb" / "adaptive-skills_0.1.16_amd64.deb",
+                "darwin-updater": bundle / "macos" / "Adaptive Skills.app.tar.gz",
+                "win32-updater": bundle / "nsis" / "Adaptive Skills_0.1.16_x64-setup.exe",
+                "linux-updater": bundle / "appimage" / "Adaptive Skills_0.1.16_amd64.AppImage",
             }
             for artifact in artifacts.values():
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 artifact.touch()
+            for key in ("darwin-updater", "win32-updater", "linux-updater"):
+                artifacts[key].with_name(artifacts[key].name + ".sig").write_text(
+                    "test-signature", encoding="utf-8"
+                )
 
             self.assertEqual(
                 verifier.bundle_artifacts(root, "darwin", "0.1.16"),
@@ -36,6 +43,10 @@ class BundleVerifierTests(unittest.TestCase):
             self.assertEqual(
                 verifier.bundle_artifacts(root, "linux", "0.1.16"),
                 [artifacts["linux-appimage"], artifacts["linux-deb"]],
+            )
+            self.assertEqual(
+                verifier.updater_artifacts(root, "darwin", "0.1.16"),
+                [artifacts["darwin-updater"], artifacts["darwin-updater"].with_name(artifacts["darwin-updater"].name + ".sig")],
             )
 
     def test_rejects_missing_duplicate_and_unknown_platform_artifacts(self) -> None:
@@ -131,19 +142,24 @@ class BundleVerifierTests(unittest.TestCase):
             deb = sources / "adaptive-skills_0.1.16_amd64.deb"
             for artifact in (dmg, nsis, appimage, deb):
                 artifact.write_bytes(artifact.name.encode())
-            app = sources / "Adaptive Skills.app"
-            app.mkdir()
-            (app / "Contents").mkdir()
-            (app / "Contents" / "fixture").write_text("app", encoding="utf-8")
+            mac_updater = sources / "Adaptive Skills.app.tar.gz"
+            windows_updater = nsis
+            linux_updater = appimage
+            updater_files = []
+            for updater in (mac_updater, windows_updater, linux_updater):
+                updater.write_bytes(updater.name.encode())
+                signature = updater.with_name(updater.name + ".sig")
+                signature.write_text(f"signature-for-{updater.name}", encoding="utf-8")
+                updater_files.append((updater, signature))
 
             verifier.stage_verified_assets(
-                [dmg], "darwin", "0.1.16", inputs / "desktop-macos-arm64", mac_app=app
+                [dmg], list(updater_files[0]), "darwin", "0.1.16", inputs / "desktop-macos-arm64"
             )
             verifier.stage_verified_assets(
-                [nsis], "win32", "0.1.16", inputs / "desktop-windows-x64"
+                [nsis], list(updater_files[1]), "win32", "0.1.16", inputs / "desktop-windows-x64"
             )
             verifier.stage_verified_assets(
-                [appimage, deb], "linux", "0.1.16", inputs / "desktop-linux-x64"
+                [appimage, deb], list(updater_files[2]), "linux", "0.1.16", inputs / "desktop-linux-x64"
             )
             output = root / "release-assets"
             verifier.assemble_release_assets(inputs, output, "0.1.16")
@@ -152,12 +168,16 @@ class BundleVerifierTests(unittest.TestCase):
             self.assertEqual(
                 names,
                 [
+                    "Adaptive Skills.app.tar.gz",
+                    "Adaptive Skills.app.tar.gz.sig",
                     "Adaptive Skills_0.1.16_aarch64.dmg",
                     "Adaptive Skills_0.1.16_amd64.AppImage",
-                    "Adaptive Skills_0.1.16_macos.app.zip",
+                    "Adaptive Skills_0.1.16_amd64.AppImage.sig",
                     "Adaptive Skills_0.1.16_x64-setup.exe",
+                    "Adaptive Skills_0.1.16_x64-setup.exe.sig",
                     "SHA256SUMS",
                     "adaptive-skills_0.1.16_amd64.deb",
+                    "latest.json",
                 ],
             )
             checksum_names = {
@@ -165,6 +185,17 @@ class BundleVerifierTests(unittest.TestCase):
                 for line in (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
             }
             self.assertEqual(checksum_names, set(names) - {"SHA256SUMS"})
+            latest = json.loads((output / "latest.json").read_text(encoding="utf-8"))
+            self.assertEqual(latest["version"], "0.1.16")
+            self.assertEqual(
+                set(latest["platforms"]),
+                {"darwin-aarch64", "windows-x86_64", "linux-x86_64"},
+            )
+            self.assertTrue(
+                latest["platforms"]["darwin-aarch64"]["url"].endswith(
+                    "Adaptive%20Skills.app.tar.gz"
+                )
+            )
 
             manifest = json.loads(
                 (inputs / "desktop-linux-x64" / "verified-assets.json").read_text(

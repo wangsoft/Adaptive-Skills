@@ -26,11 +26,17 @@ from .sources import SourceManager
 
 
 def _emit(value: Any, *, compact: bool = False) -> None:
-    print(
-        json.dumps(
-            value, ensure_ascii=False, indent=None if compact else 2, sort_keys=True
-        )
+    payload = json.dumps(
+        value, ensure_ascii=False, indent=None if compact else 2, sort_keys=True
     )
+    try:
+        sys.stdout.write(payload + "\n")
+    except UnicodeEncodeError:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+            sys.stdout.write(payload + "\n")
+        else:
+            raise
 
 
 def _settings(arguments: argparse.Namespace) -> Settings:

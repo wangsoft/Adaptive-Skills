@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "adaptive-skills"
-version = "0.1.16"
+version = "0.1.17"
 description = "Local-first catalog and project linker for Agent Skills"
 readme = "README.md"
 requires-python = ">=3.12"
