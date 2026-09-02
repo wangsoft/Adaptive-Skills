@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:sidecar": "../.venv/bin/python ../scripts/build_desktop_sidecar.py",
+    "build:sidecar": "node scripts/python-runner.mjs ../scripts/build_desktop_sidecar.py",
     "build:bundle": "npm run build:sidecar && npm run build",
-    "build:dmg": "tauri build --ci --bundles app,dmg",
-    "verify:bundle": "../.venv/bin/python ../scripts/verify_desktop_bundle.py",
+    "build:macos": "tauri build --ci --bundles app,dmg",
+    "build:windows": "tauri build --ci --bundles nsis",
+    "build:linux": "tauri build --ci --bundles appimage,deb",
+    "verify:bundle": "node scripts/python-runner.mjs ../scripts/verify_desktop_bundle.py",
     "test": "vitest",
     "tauri": "tauri"
   },

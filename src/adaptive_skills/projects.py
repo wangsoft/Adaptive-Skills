@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -35,6 +36,22 @@ def _lexists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
+def _is_link_like(path: Path) -> bool:
+    is_junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(is_junction and is_junction())
+
+
+def _symlinks_unavailable(error: OSError) -> bool:
+    unsupported = {
+        errno.EACCES,
+        errno.EPERM,
+        errno.ENOSYS,
+        errno.ENOTSUP,
+        errno.EOPNOTSUPP,
+    }
+    return error.errno in unsupported or getattr(error, "winerror", None) == 1314
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temporary = tempfile.mkstemp(
@@ -67,6 +84,19 @@ def _safe_entry_path(project: Path, relative: str) -> Path:
     lexical = Path(os.path.abspath(project / value))
     try:
         lexical.relative_to(project)
+    except ValueError as exc:
+        raise ValidationError(f"Manifest entry escapes project: {relative}") from exc
+    ancestor = lexical.parent
+    while ancestor != project:
+        if _lexists(ancestor) and _is_link_like(ancestor):
+            raise ValidationError(
+                f"Manifest entry has a link-like ancestor: {relative}"
+            )
+        ancestor = ancestor.parent
+    try:
+        lexical.parent.resolve(strict=False).relative_to(
+            project.resolve(strict=False)
+        )
     except ValueError as exc:
         raise ValidationError(f"Manifest entry escapes project: {relative}") from exc
     return lexical
@@ -1032,6 +1062,7 @@ class ProjectManager:
                     installed.append(previous)
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
+                destination = _safe_entry_path(root, relative)
                 actual_mode = self._install(source, destination, mode)
                 installed_hash, _ = hash_skill_tree(
                     destination if actual_mode == "copy" else source
@@ -1562,13 +1593,12 @@ class ProjectManager:
             if mode in {"auto", "symlink"}:
                 try:
                     os.symlink(source, temporary, target_is_directory=True)
+                except OSError as exc:
+                    if mode == "symlink" or not _symlinks_unavailable(exc):
+                        raise
+                else:
                     os.replace(temporary, destination)
                     return "symlink"
-                except OSError:
-                    if _lexists(temporary):
-                        temporary.unlink()
-                    if mode == "symlink":
-                        raise
             shutil.copytree(source, temporary, symlinks=True)
             os.replace(temporary, destination)
             return "copy"

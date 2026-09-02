@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from adaptive_skills import __version__
 from adaptive_skills.database import SCHEMA_VERSION
 from tests.helpers import commit_all, init_repo, write_skill
 
@@ -207,6 +208,7 @@ class CliTests(unittest.TestCase):
 
             initialized = run_cli(library, "init")
             self.assertEqual(initialized["schema_version"], SCHEMA_VERSION)
+            self.assertEqual(initialized["release_version"], __version__)
             registered = run_cli(library, "source", "register", str(source))
             scanned = run_cli(library, "scan", registered["id"])
             self.assertEqual(scanned[0]["valid"], 1)

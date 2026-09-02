@@ -34,7 +34,9 @@ Skill 不应该全部塞进全局上下文。Adaptive Skills 将 `~/skills` 作�
 
 ### 下载与安装
 
-适用于 **macOS Apple Silicon（arm64）**：[下载 Adaptive Skills v0.1.16 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg)。当前构建使用临时签名，**未经过 Apple 公证**。请只从本仓库下载，并在解除隔离前核对 SHA-256。
+当前已发布的 **v0.1.16** 仅提供 **macOS Apple Silicon（arm64）**：
+[下载 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg)。
+该构建使用临时签名，**未经过 Apple 公证**。
 
 ```bash
 cd ~/Downloads
@@ -49,6 +51,20 @@ open Adaptive-Skills_0.1.16_aarch64.dmg
 xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
+
+从下一个版本标签开始，[GitHub Releases](https://github.com/wangsoft/Adaptive-Skills/releases)
+将通过原生 Runner 同时提供：
+
+| 平台 | 架构 | 发布包 |
+| --- | --- | --- |
+| macOS 15 | Apple Silicon（arm64） | DMG、`.app.zip` |
+| Windows | x64 | NSIS `setup.exe` |
+| Linux（Ubuntu 22.04） | x64 | AppImage、DEB |
+
+新的多平台 Release 会同时提供 `SHA256SUMS`。安装前请核对对应文件的
+SHA-256；Windows 安装包当前未签名，macOS 构建仍使用临时签名且未公证。
+Linux AppImage 需先执行 `chmod +x <文件名>.AppImage`，DEB 可通过
+`sudo apt install ./<文件名>.deb` 安装。
 
 ### 本地开发
 
@@ -91,7 +107,10 @@ Skills should not all live in the global context. Adaptive Skills treats `~/skil
 
 ### Download and install
 
-For **macOS Apple Silicon (arm64)**: [download Adaptive Skills v0.1.16 DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg). The current build uses an ad-hoc signature and is **not notarized by Apple**. Download it only from this repository and verify the SHA-256 checksum before removing quarantine.
+The currently published **v0.1.16** release contains only the
+**macOS Apple Silicon (arm64)** build:
+[download the DMG](https://github.com/wangsoft/Adaptive-Skills/releases/download/v0.1.16/Adaptive-Skills_0.1.16_aarch64.dmg).
+It uses an ad-hoc signature and is **not notarized by Apple**.
 
 ```bash
 cd ~/Downloads
@@ -106,6 +125,22 @@ Drag the app into `/Applications`, remove quarantine, and launch it:
 xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
+
+Starting with the next version tag,
+[GitHub Releases](https://github.com/wangsoft/Adaptive-Skills/releases) will
+publish native packages for all three platforms:
+
+| Platform | Architecture | Packages |
+| --- | --- | --- |
+| macOS 15 | Apple Silicon (arm64) | DMG, `.app.zip` |
+| Windows | x64 | NSIS `setup.exe` |
+| Linux (Ubuntu 22.04) | x64 | AppImage, DEB |
+
+Each new multi-platform release also includes `SHA256SUMS`. Verify the matching
+SHA-256 before installation. Windows installers are currently unsigned; macOS
+builds remain ad-hoc signed and unnotarized. Run `chmod +x <name>.AppImage`
+before launching an AppImage, or install a DEB with
+`sudo apt install ./<name>.deb`.
 
 ### Run locally
 

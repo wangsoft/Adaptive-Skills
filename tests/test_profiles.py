@@ -81,6 +81,24 @@ Run the reusable workflow.
         self.assertTrue(deleted["deleted"])
         self.assertTrue((project / ".claude" / "skills" / "shared-skill").exists())
 
+    def test_profile_application_allows_managed_copy_fallback(self) -> None:
+        profile = self.service.save(
+            name="跨平台工作流",
+            skill_ids=[self.agents_skill["id"]],
+        )
+        project = Path(self.temporary.name) / "portable-project"
+        project.mkdir()
+
+        with patch.object(
+            self.service.projects,
+            "apply",
+            return_value={"installed": [{"mode": "copy"}]},
+        ) as apply:
+            result = self.service.apply(profile["id"], project)
+
+        self.assertEqual(result["installed"], [{"mode": "copy"}])
+        self.assertEqual(apply.call_args.kwargs["mode"], "auto")
+
     def test_capture_uses_portable_locators_and_conflict_blocks_all_changes(self) -> None:
         project = Path(self.temporary.name) / "project"
         project.mkdir()

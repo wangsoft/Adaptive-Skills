@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -429,6 +430,59 @@ Use the local project workflow.
         )
         self.assertEqual(manifest["entries"], [])
         self.assertEqual(len(manifest["history"]), 3)
+
+    def test_auto_mode_falls_back_to_a_managed_copy_when_symlinks_are_denied(
+        self,
+    ) -> None:
+        project = Path(self.temporary.name) / "windows-like-project"
+        project.mkdir()
+        manager = ProjectManager(self.settings)
+
+        with patch(
+            "adaptive_skills.projects.os.symlink",
+            side_effect=PermissionError(errno.EPERM, "symlink privilege unavailable"),
+        ):
+            applied = manager.apply(
+                project,
+                [self.presentation["id"]],
+                mode="auto",
+            )
+
+        entry = project / ".agents" / "skills" / "presentation-maker"
+        self.assertTrue(entry.is_dir())
+        self.assertFalse(entry.is_symlink())
+        self.assertEqual(applied["installed"][0]["mode"], "copy")
+        self.assertTrue(manager.status(project)["clean"])
+
+    def test_auto_mode_does_not_hide_a_symlink_commit_failure(self) -> None:
+        project = Path(self.temporary.name) / "replace-failure-project"
+        project.mkdir()
+        manager = ProjectManager(self.settings)
+
+        with (
+            patch(
+                "adaptive_skills.projects.os.replace",
+                side_effect=OSError(errno.EIO, "commit failed"),
+            ),
+            patch("adaptive_skills.projects.shutil.copytree") as copytree,
+            self.assertRaisesRegex(OSError, "commit failed"),
+        ):
+            manager.apply(project, [self.presentation["id"]], mode="auto")
+
+        copytree.assert_not_called()
+
+    def test_apply_rejects_a_symlinked_target_ancestor(self) -> None:
+        project = Path(self.temporary.name) / "redirected-project"
+        outside = Path(self.temporary.name) / "outside"
+        project.mkdir()
+        outside.mkdir()
+        (project / ".agents").symlink_to(outside, target_is_directory=True)
+        manager = ProjectManager(self.settings)
+
+        with self.assertRaisesRegex(ValidationError, "link-like ancestor"):
+            manager.apply(project, [self.presentation["id"]], mode="auto")
+
+        self.assertFalse((outside / "skills" / "presentation-maker").exists())
 
     def test_managed_project_registry_tracks_moves_without_owning_manifest(self) -> None:
         project = Path(self.temporary.name) / "registered-project"

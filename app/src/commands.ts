@@ -205,7 +205,7 @@ export function projectApplyArgs(
     "--target",
     target,
     "--mode",
-    "symlink",
+    "auto",
     "--requirement",
     requirement,
     ...(allowRisk ? ["--allow-risk"] : []),

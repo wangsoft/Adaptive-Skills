@@ -70,13 +70,32 @@ impl CoreRuntime {
     }
 }
 
-fn packaged_core_path(resources: &Path) -> PathBuf {
-    let executable = if cfg!(target_os = "windows") {
+fn packaged_core_path_for(resources: &Path, windows: bool) -> PathBuf {
+    let executable = if windows {
         format!("{CORE_BINARY_NAME}.exe")
     } else {
         CORE_BINARY_NAME.into()
     };
     resources.join(CORE_BINARY_NAME).join(executable)
+}
+
+fn packaged_core_path(resources: &Path) -> PathBuf {
+    packaged_core_path_for(resources, cfg!(target_os = "windows"))
+}
+fn development_python_path(root: &Path, windows: bool) -> PathBuf {
+    if windows {
+        root.join(".venv/Scripts/python.exe")
+    } else {
+        root.join(".venv/bin/python")
+    }
+}
+
+fn development_python_command(windows: bool) -> &'static str {
+    if windows {
+        "python"
+    } else {
+        "python3"
+    }
 }
 
 fn core_runtime(root: &Path, resources: Option<&Path>) -> Result<CoreRuntime, CommandFailure> {
@@ -94,12 +113,15 @@ fn core_runtime(root: &Path, resources: Option<&Path>) -> Result<CoreRuntime, Co
     if let Some(configured) = env::var_os("ADAPTIVE_SKILLS_PYTHON") {
         return Ok(CoreRuntime::Python(configured));
     }
-    let development_python = root.join(".venv/bin/python");
+    let windows = cfg!(target_os = "windows");
+    let development_python = development_python_path(root, windows);
     if cfg!(debug_assertions) && development_python.is_file() {
         return Ok(CoreRuntime::Python(development_python.into_os_string()));
     }
     if cfg!(debug_assertions) {
-        return Ok(CoreRuntime::Python(OsString::from("python3")));
+        return Ok(CoreRuntime::Python(OsString::from(
+            development_python_command(windows),
+        )));
     }
 
     Err(CommandFailure {
@@ -327,15 +349,44 @@ mod tests {
     }
 
     #[test]
+    fn runtime_paths_cover_windows_and_unix_conventions() {
+        let resources = Path::new("/opt/adaptive-skills/resources");
+        assert_eq!(
+            packaged_core_path_for(resources, false),
+            resources.join("adaptive-skills-core/adaptive-skills-core")
+        );
+        assert_eq!(
+            packaged_core_path_for(resources, true),
+            resources.join("adaptive-skills-core/adaptive-skills-core.exe")
+        );
+
+        let root = Path::new("/workspace/adaptive-skills");
+        assert_eq!(
+            development_python_path(root, false),
+            root.join(".venv/bin/python")
+        );
+        assert_eq!(
+            development_python_path(root, true),
+            root.join(".venv/Scripts/python.exe")
+        );
+        assert_eq!(development_python_command(false), "python3");
+        assert_eq!(development_python_command(true), "python");
+    }
+
+    #[test]
     fn bundled_core_is_resolved_inside_application_resources() {
         let path = packaged_core_path(Path::new(
             "/Applications/Adaptive Skills.app/Contents/Resources",
         ));
+        let executable = if cfg!(target_os = "windows") {
+            "adaptive-skills-core.exe"
+        } else {
+            "adaptive-skills-core"
+        };
         assert_eq!(
             path,
-            PathBuf::from(
-                "/Applications/Adaptive Skills.app/Contents/Resources/adaptive-skills-core/adaptive-skills-core"
-            )
+            Path::new("/Applications/Adaptive Skills.app/Contents/Resources/adaptive-skills-core")
+                .join(executable)
         );
     }
 

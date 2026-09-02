@@ -359,7 +359,7 @@ function ActivationCellControl({
       <Localized><button
         type="button"
         className="activation-control state-managed"
-        title={translate(`卸载受管软链接：${cell.path}`, `Uninstall managed symlink: ${cell.path}`)}
+        title={translate(`卸载受管 Skill：${cell.path}`, `Uninstall managed Skill: ${cell.path}`)}
         disabled={Boolean(busy)}
         onClick={() => onUninstall(row, cell, target)}
       >

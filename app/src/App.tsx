@@ -946,7 +946,7 @@ function Overview({ snapshot, onNavigate }: { snapshot: AppSnapshot; onNavigate:
         <div>
           <div className="eyebrow"><Sparkles size={14} /> 本地优先 · 按项目加载</div>
           <h2>让每个项目只看到真正需要的 Skills。</h2>
-          <p>分类、评分和风险审查都保存在本地 SQLite。先解释推荐，再由你确认创建项目软链接。</p>
+          <p>分类、评分和风险审查都保存在本地 SQLite。先解释推荐，再由你确认创建项目受管条目。</p>
           <button className="button primary" onClick={() => onNavigate("projects")}>初始化项目 Skills <ArrowRight size={16} /></button>
         </div>
         <div className="hero-orbit" aria-hidden="true">
@@ -1972,9 +1972,9 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
       )
       : "";
     if (!window.confirm(translate(
-      "将“" + row.name + "”以受管软链接安装到 " + matrixTarget.label +
-      "？\n目标：" + cell.path + "。" + riskCopy,
-      `Install “${row.name}” as a managed symlink in ${matrixTarget.label}?\nTarget: ${cell.path}.${riskCopy}`,
+      "将“" + row.name + "”安装为 " + matrixTarget.label + " 的受管 Skill" +
+      "？\n目标：" + cell.path + "。系统会优先创建软链接，权限不足时改用受管副本。" + riskCopy,
+      `Install “${row.name}” as a managed Skill in ${matrixTarget.label}?\nTarget: ${cell.path}. A managed copy is used when symlinks are unavailable.${riskCopy}`,
     ))) return;
     void run("matrix-install", async () => {
       await api.projectApply(
@@ -1997,8 +1997,8 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     if (!cell.installed_skill_id) return;
     if (!window.confirm(translate(
       "从 " + matrixTarget.label + " 卸载“" + row.name +
-      "”的受管软链接？目录仓库中的 Skill 不会被删除。",
-      `Uninstall the managed symlink for “${row.name}” from ${matrixTarget.label}? The library copy will not be deleted.`,
+      "”的受管 Skill？目录仓库中的 Skill 不会被删除。",
+      `Uninstall the managed Skill “${row.name}” from ${matrixTarget.label}? The library copy will not be deleted.`,
     ))) return;
     void run("matrix-uninstall", async () => {
       await api.projectUnlink(
@@ -2061,9 +2061,9 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     if (!profilePreview || !selectedProfileId) return;
     if (!window.confirm(translate(
       "将配置集“" + profilePreview.profile.name + "”应用到当前目标？\n" +
-      profilePreview.counts.install + " 项将创建受管软链接，" +
+      profilePreview.counts.install + " 项将创建受管条目，" +
       profilePreview.counts["already-installed"] + " 项保持不变。",
-      `Apply profile “${profilePreview.profile.name}” to the current target?\n${profilePreview.counts.install} managed symlinks will be created; ${profilePreview.counts["already-installed"]} existing items will remain unchanged.`,
+      `Apply profile “${profilePreview.profile.name}” to the current target?\n${profilePreview.counts.install} managed entries will be created; ${profilePreview.counts["already-installed"]} existing items will remain unchanged.`,
     ))) return;
     void run("profile-apply", async () => {
       await api.profileApply(
@@ -2360,7 +2360,7 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
     <Localized><div className="project-layout">
       <section className="panel project-builder">
         <div className="project-draft-heading"><button className="text-button" type="button" onClick={() => { setScreen("list"); void loadProjects(); }}><ArrowLeft size={13} />项目列表</button><div className="step-label"><span>1</span> {status?.project_kind === "system" ? "Agent 全局映射" : "项目与发现方式"}</div>{status?.project_kind === "system" ? <span className="badge neutral">系统项目</span> : <button className="text-button" type="button" onClick={clearDraft}><Trash2 size={13} />清空草稿</button>}</div>
-        <h2>{status?.project_kind === "system" ? "管理 Agent 全局 Skills" : "按项目选择 Skills"}</h2><p className="muted">{status?.project_kind === "system" ? "系统项目始终保留；可以卸载受管 Skill，外部已有内容默认只读。" : "按需求检索或按分类浏览；只有被勾选的 Skill 才会创建软链接。"}</p>
+        <h2>{status?.project_kind === "system" ? "管理 Agent 全局 Skills" : "按项目选择 Skills"}</h2><p className="muted">{status?.project_kind === "system" ? "系统项目始终保留；可以卸载受管 Skill，外部已有内容默认只读。" : "按需求检索或按分类浏览；只有被勾选的 Skill 才会添加为受管条目。"}</p>
         {status && status.project_kind === "project" && !status.managed && <div className="project-setup-notice"><Sparkles size={16} /><span>这是尚未接入 Adaptive Skills 的普通项目。首次应用 Skill 后会创建 manifest，并加入项目历史列表。</span></div>}
         {status?.project_kind === "system" && <div className="project-setup-notice">{status.provisioned ? <ShieldCheck size={16} /> : <Sparkles size={16} />}<span>{status.provisioned ? "此映射来自初始化的 Discovery Scope，与本机 Agent 全局目录保持一致，不能从项目列表移除或重新定位。" : "已检测到此 Agent，但全局 Skills 目录尚未创建；首次安装 Skill 时会自动安全创建。"}</span></div>}
         <label className="input-field"><span>{status?.project_kind === "system" ? "Agent 全局 Skills 目录" : "项目目录"}</span><div className={status?.project_kind === "system" ? "input-with-button locked" : "input-with-button"}><input value={project} readOnly={status?.project_kind === "system"} onChange={(event) => { setProject(event.target.value); setPlan(null); setSelected(new Set()); }} placeholder="/path/to/project" />{status?.project_kind !== "system" && <button type="button" onClick={chooseProject}><FolderOpen size={17} /></button>}</div></label>
@@ -2461,8 +2461,8 @@ function ProjectsView({ library, categories, onError }: { library: string; categ
       {confirming && plan && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setConfirming(false)}>
           <div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-project-links-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="confirm-icon"><Link2 size={22} /></div><h2 id="confirm-project-links-title">确认创建项目软链接</h2><p>将 {selected.size} 个 Skill 挂载到 <strong>{plan.target}</strong>。只管理本次写入 manifest 的条目，不覆盖未登记内容。</p>
-            <div className="confirm-summary"><span>项目</span><strong>{project}</strong><span>方式</span><strong>symlink</strong><span>高风险 Skill</span><strong>{riskySelected}</strong></div>
+            <div className="confirm-icon"><Link2 size={22} /></div><h2 id="confirm-project-links-title">确认创建项目受管条目</h2><p>将 {selected.size} 个 Skill 挂载到 <strong>{plan.target}</strong>。只管理本次写入 manifest 的条目，不覆盖未登记内容。</p>
+            <div className="confirm-summary"><span>项目</span><strong>{project}</strong><span>方式</span><strong>{translate("自动（软链接优先，失败时复制）", "Automatic (symlink preferred, copy fallback)")}</strong><span>高风险 Skill</span><strong>{riskySelected}</strong></div>
             {riskySelected > 0 && <label className="confirm-risk"><input type="checkbox" checked={riskConfirmed} onChange={(event) => setRiskConfirmed(event.target.checked)} /><span>我已审查所选高风险 Skill，并接受其静态审计结果。</span></label>}
             <div className="button-row"><button className="button ghost" autoFocus onClick={() => setConfirming(false)}>返回检查</button><button className="button primary" disabled={Boolean(busy) || (riskySelected > 0 && !riskConfirmed)} onClick={() => void apply()}>{busy === "apply" ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}确认应用</button></div>
           </div>
@@ -2592,7 +2592,7 @@ function ActivityToast({ label }: { label: string }) {
     "profile-import-preview": "正在验证配置集文件…",
     "profile-import": "正在保存配置集元数据…",
     plan: "正在匹配项目需求…",
-    apply: "正在创建项目软链接…",
+    apply: "正在安装项目受管 Skills…",
     sync: "正在同步项目链接…",
     unlink: "正在安全移除链接…",
   };

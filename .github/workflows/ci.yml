@@ -10,35 +10,47 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_VERSION: "0.1.16"
+
 concurrency:
   group: adaptive-skills-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   quality:
-    runs-on: macos-15
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-15, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22"
           package-manager-cache: false
-      - name: Create Python environment
-        run: python3 -m venv .venv
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - name: Install Python dependencies
-        run: .venv/bin/python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
       - name: Install desktop dependencies
         working-directory: app
         run: npm ci
       - name: Verify release contract
-        run: .venv/bin/python scripts/check_release_contract.py
+        run: python scripts/check_release_contract.py
       - name: Test Python core
-        run: .venv/bin/python -m unittest discover -s tests -q
+        run: python -m unittest discover -s tests -q
       - name: Test desktop frontend
         working-directory: app
         run: npm test -- --run
@@ -48,30 +60,90 @@ jobs:
       - name: Test Tauri bridge
         run: cargo test --manifest-path app/src-tauri/Cargo.toml
 
-  bundle-smoke:
+  bundle:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     needs: quality
-    runs-on: macos-15
-    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-15
+            bundles: app,dmg
+            artifact: desktop-macos-arm64
+          - platform: windows-latest
+            bundles: nsis
+            artifact: desktop-windows-x64
+          - platform: ubuntu-22.04
+            bundles: appimage,deb
+            artifact: desktop-linux-x64
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "22"
           package-manager-cache: false
-      - name: Create Python environment
-        run: python3 -m venv .venv
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils p7zip-full
       - name: Install packaging dependencies
-        run: .venv/bin/python -m pip install -e ".[desktop]"
+        run: python -m pip install -e ".[desktop]"
       - name: Install desktop dependencies
         working-directory: app
         run: npm ci
-      - name: Build app and DMG
+      - name: Build native desktop packages
         working-directory: app
-        run: npm run build:dmg
+        run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }}
       - name: Verify packaged core
-        run: .venv/bin/python scripts/verify_desktop_bundle.py
+        run: python scripts/verify_desktop_bundle.py
+      - name: Stage verified packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: app/src-tauri/target/release/verified-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Download verified platform packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: desktop-*
+          path: release-inputs
+      - name: Assemble exact release assets
+        run: python3 scripts/verify_desktop_bundle.py --assemble-release release-inputs release-assets --version "$RELEASE_VERSION"
+      - name: Publish one release after every platform passes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test "$GITHUB_REF_NAME" = "v${RELEASE_VERSION}"
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Refusing to reuse existing release $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" --verify-tag --draft --generate-notes --title "Adaptive Skills $tag"
+          gh release upload "$tag" release-assets/*
+          expected="$(sed 's/^[0-9a-f]\{64\}  //' release-assets/SHA256SUMS; printf '%s\n' SHA256SUMS)"
+          actual="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+          test "$(printf '%s\n' "$actual" | sort)" = "$(printf '%s\n' "$expected" | sort)"
+          gh release edit "$tag" --draft=false

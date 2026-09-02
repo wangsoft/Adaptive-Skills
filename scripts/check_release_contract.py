@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tomllib
 from pathlib import Path
@@ -10,6 +11,26 @@ import yaml
 
 
 RELEASE_VERSION = "0.1.16"
+CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+SETUP_PYTHON_ACTION = "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
+SETUP_NODE_ACTION = "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38"
+UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+DOWNLOAD_ARTIFACT_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+JOB_ACTIONS = {
+    "quality": [CHECKOUT_ACTION, SETUP_PYTHON_ACTION, SETUP_NODE_ACTION],
+    "bundle": [
+        CHECKOUT_ACTION,
+        SETUP_PYTHON_ACTION,
+        SETUP_NODE_ACTION,
+        UPLOAD_ARTIFACT_ACTION,
+    ],
+    "release": [CHECKOUT_ACTION, DOWNLOAD_ARTIFACT_ACTION],
+}
+PLATFORMS = {
+    "macos-15": {"bundles": "app,dmg", "artifact": "desktop-macos-arm64"},
+    "windows-latest": {"bundles": "nsis", "artifact": "desktop-windows-x64"},
+    "ubuntu-22.04": {"bundles": "appimage,deb", "artifact": "desktop-linux-x64"},
+}
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -26,10 +47,212 @@ def _assert_equal(label: str, actual: object, expected: object) -> None:
         raise RuntimeError(f"{label} is {actual!r}; expected {expected!r}")
 
 
+
+
+def _named_step(job: dict[str, Any], name: str) -> tuple[int, dict[str, Any]]:
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        raise RuntimeError("GitHub Actions job has no steps list")
+    matches = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if isinstance(step, dict) and step.get("name") == name
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one GitHub Actions step named {name!r}")
+    return matches[0]
+
+
+def validate_workflow(workflow: object, release_version: str) -> None:
+    if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
+        raise RuntimeError("GitHub Actions workflow has no jobs mapping")
+    _assert_equal(
+        "GitHub Actions jobs",
+        set(workflow["jobs"]),
+        {"quality", "bundle", "release"},
+    )
+    triggers = workflow.get("on")
+    if not isinstance(triggers, dict):
+        raise RuntimeError("GitHub Actions workflow has no trigger mapping")
+    _assert_equal(
+        "GitHub Actions triggers",
+        set(triggers),
+        {"push", "pull_request", "workflow_dispatch"},
+    )
+    _assert_equal(
+        "GitHub Actions release version",
+        workflow.get("env", {}).get("RELEASE_VERSION"),
+        release_version,
+    )
+    _assert_equal(
+        "GitHub Actions default permission",
+        workflow.get("permissions"),
+        {"contents": "read"},
+    )
+    for job_name, expected_actions in JOB_ACTIONS.items():
+        steps = workflow["jobs"][job_name].get("steps")
+        if not isinstance(steps, list):
+            raise RuntimeError(f"{job_name} job has no steps")
+        action_steps = [
+            step
+            for step in steps
+            if isinstance(step, dict) and isinstance(step.get("uses"), str)
+        ]
+        actual_actions = [step["uses"] for step in action_steps]
+        if actual_actions != expected_actions:
+            raise RuntimeError(
+                f"{job_name} job must use only the approved immutable actions; "
+                f"found {actual_actions!r}"
+            )
+        checkout = next(
+            (step for step in action_steps if step["uses"] == CHECKOUT_ACTION),
+            None,
+        )
+        if checkout is not None and checkout.get("with", {}).get(
+            "persist-credentials"
+        ) != "false":
+            raise RuntimeError(f"{job_name} checkout must not persist credentials")
+
+    quality = workflow["jobs"]["quality"]
+    _assert_equal(
+        "quality platform matrix",
+        quality.get("strategy", {}).get("matrix", {}).get("platform"),
+        list(PLATFORMS),
+    )
+    _assert_equal("quality runner", quality.get("runs-on"), "${{ matrix.platform }}")
+
+    bundle = workflow["jobs"]["bundle"]
+    _assert_equal("bundle dependency", bundle.get("needs"), "quality")
+    _assert_equal("bundle runner", bundle.get("runs-on"), "${{ matrix.platform }}")
+    _assert_equal(
+        "bundle platform matrix",
+        bundle.get("strategy", {}).get("matrix", {}).get("include"),
+        [
+            {
+                "platform": platform,
+                "bundles": config["bundles"],
+                "artifact": config["artifact"],
+            }
+            for platform, config in PLATFORMS.items()
+        ],
+    )
+    _assert_equal(
+        "bundle gate",
+        bundle.get("if"),
+        "github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')",
+    )
+    build_index, build = _named_step(bundle, "Build native desktop packages")
+    verify_index, verify = _named_step(bundle, "Verify packaged core")
+    upload_index, upload = _named_step(bundle, "Stage verified packages")
+    if not build_index < verify_index < upload_index:
+        raise RuntimeError("bundle step order must be build, verify, then upload")
+    _assert_equal(
+        "native bundle command",
+        build.get("run"),
+        "npm run tauri -- build --ci --bundles ${{ matrix.bundles }}",
+    )
+    _assert_equal(
+        "packaged core verifier",
+        verify.get("run"),
+        "python scripts/verify_desktop_bundle.py",
+    )
+    _assert_equal("verified package upload action", upload.get("uses"), UPLOAD_ARTIFACT_ACTION)
+    _assert_equal(
+        "verified package upload name",
+        upload.get("with", {}).get("name"),
+        "${{ matrix.artifact }}",
+    )
+    _assert_equal(
+        "verified package upload path",
+        upload.get("with", {}).get("path"),
+        "app/src-tauri/target/release/verified-assets",
+    )
+
+    release = workflow["jobs"]["release"]
+    _assert_equal("release dependency", release.get("needs"), "bundle")
+    _assert_equal("release runner", release.get("runs-on"), "ubuntu-22.04")
+    _assert_equal("release permission", release.get("permissions"), {"contents": "write"})
+    _assert_equal(
+        "release gate",
+        release.get("if"),
+        "startsWith(github.ref, 'refs/tags/v')",
+    )
+    download_index, download = _named_step(
+        release, "Download verified platform packages"
+    )
+    assemble_index, assemble = _named_step(release, "Assemble exact release assets")
+    publish_index, publish = _named_step(
+        release, "Publish one release after every platform passes"
+    )
+    if not download_index < assemble_index < publish_index:
+        raise RuntimeError("release step order must be download, assemble, then publish")
+    _assert_equal(
+        "verified package download action",
+        download.get("uses"),
+        DOWNLOAD_ARTIFACT_ACTION,
+    )
+    _assert_equal(
+        "verified package download pattern",
+        download.get("with", {}).get("pattern"),
+        "desktop-*",
+    )
+    _assert_equal(
+        "verified package download path",
+        download.get("with", {}).get("path"),
+        "release-inputs",
+    )
+    if download.get("with", {}).get("merge-multiple") not in {None, "false"}:
+        raise RuntimeError("release download must not enable merge-multiple")
+    _assert_equal(
+        "release asset assembler",
+        assemble.get("run"),
+        'python3 scripts/verify_desktop_bundle.py --assemble-release release-inputs release-assets --version "$RELEASE_VERSION"',
+    )
+    _assert_equal(
+        "release repository context",
+        publish.get("env", {}).get("GH_REPO"),
+        "${{ github.repository }}",
+    )
+    _assert_equal(
+        "release token context",
+        publish.get("env", {}).get("GH_TOKEN"),
+        "${{ github.token }}",
+    )
+    publish_command = str(publish.get("run", "")).strip()
+    if not publish_command.startswith(
+        'test "$GITHUB_REF_NAME" = "v${RELEASE_VERSION}"'
+    ):
+        raise RuntimeError("release tag version check changed")
+    expected_publish = r"""test "$GITHUB_REF_NAME" = "v${RELEASE_VERSION}"
+tag="${GITHUB_REF_NAME}"
+if gh release view "$tag" >/dev/null 2>&1; then
+  echo "Refusing to reuse existing release $tag" >&2
+  exit 1
+fi
+gh release create "$tag" --verify-tag --draft --generate-notes --title "Adaptive Skills $tag"
+gh release upload "$tag" release-assets/*
+expected="$(sed 's/^[0-9a-f]\{64\}  //' release-assets/SHA256SUMS; printf '%s\n' SHA256SUMS)"
+actual="$(gh release view "$tag" --json assets --jq '.assets[].name')"
+test "$(printf '%s\n' "$actual" | sort)" = "$(printf '%s\n' "$expected" | sort)"
+gh release edit "$tag" --draft=false"""
+    if publish_command != expected_publish:
+        raise RuntimeError("release exact asset publication contract changed")
+
+
+def _validate_release_ref(release_version: str) -> None:
+    if os.environ.get("GITHUB_REF_TYPE") != "tag":
+        return
+    expected = f"v{release_version}"
+    actual = os.environ.get("GITHUB_REF_NAME")
+    if actual != expected:
+        raise RuntimeError(f"release tag is {actual!r}; expected {expected!r}")
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "src"))
     from adaptive_skills.app_service import APP_CONTRACT_VERSION
+    from adaptive_skills import __version__
     from adaptive_skills.database import SCHEMA_VERSION
 
     package = _json(root / "app" / "package.json")
@@ -46,6 +269,7 @@ def main() -> int:
         "app/package-lock.json root package": package_lock["packages"][""]["version"],
         "app/src-tauri/Cargo.toml": cargo["package"]["version"],
         "app/src-tauri/tauri.conf.json": tauri["version"],
+        "src/adaptive_skills/__init__.py": __version__,
     }
     desktop_package = next(
         item
@@ -55,40 +279,26 @@ def main() -> int:
     versions["app/src-tauri/Cargo.lock"] = desktop_package["version"]
     for label, version in versions.items():
         _assert_equal(label, version, RELEASE_VERSION)
-    _assert_equal(
-        "app/package.json build:dmg",
-        package["scripts"].get("build:dmg"),
-        "tauri build --ci --bundles app,dmg",
-    )
+
+    expected_scripts = {
+        "build:macos": "tauri build --ci --bundles app,dmg",
+        "build:windows": "tauri build --ci --bundles nsis",
+        "build:linux": "tauri build --ci --bundles appimage,deb",
+    }
+    for name, command in expected_scripts.items():
+        _assert_equal(f"app/package.json {name}", package["scripts"].get(name), command)
+    if "build:dmg" in package["scripts"]:
+        raise RuntimeError("app/package.json still exposes obsolete build:dmg")
 
     workflow_path = root / ".github" / "workflows" / "ci.yml"
-    workflow_text = workflow_path.read_text(encoding="utf-8")
-    workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
-    if not isinstance(workflow, dict) or not isinstance(workflow.get("jobs"), dict):
-        raise RuntimeError("GitHub Actions workflow has no jobs mapping")
-    _assert_equal(
-        "GitHub Actions jobs",
-        set(workflow["jobs"]),
-        {"quality", "bundle-smoke"},
-    )
-    triggers = workflow.get("on")
-    if not isinstance(triggers, dict):
-        raise RuntimeError("GitHub Actions workflow has no trigger mapping")
-    _assert_equal(
-        "GitHub Actions triggers",
-        set(triggers),
-        {"push", "pull_request", "workflow_dispatch"},
-    )
-    for job_name in ("quality", "bundle-smoke"):
-        job = workflow["jobs"][job_name]
-        _assert_equal(f"{job_name} runner", job.get("runs-on"), "macos-15")
-    if "refs/tags/v" not in workflow_text:
-        raise RuntimeError("GitHub Actions bundle job is not gated to version tags")
+    workflow = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    validate_workflow(workflow, RELEASE_VERSION)
+    _validate_release_ref(RELEASE_VERSION)
 
     print(
         "release contract ok: "
         f"v{RELEASE_VERSION}, schema {SCHEMA_VERSION}, "
-        f"app contract {APP_CONTRACT_VERSION}"
+        f"app contract {APP_CONTRACT_VERSION}, platforms {len(PLATFORMS)}"
     )
     return 0
 

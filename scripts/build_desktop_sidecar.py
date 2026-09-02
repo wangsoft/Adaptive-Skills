@@ -67,6 +67,8 @@ def main() -> int:
             "--console",
             "--noconfirm",
             "--clean",
+            "--python-option",
+            "X utf8",
             "--paths",
             str(root / "src"),
             "--collect-submodules",

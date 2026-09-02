@@ -375,7 +375,7 @@ class SkillProfileService:
             project,
             skill_ids,
             target=target,
-            mode="symlink",
+            mode="auto",
             requirement=f"Skill profile: {preview['profile']['name']}",
             allow_risk=allow_risk,
         )

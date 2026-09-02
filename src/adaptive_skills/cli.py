@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from . import __version__
 from .app_service import AppService
 from .agent_targets import CustomAgentTargetService
 from .bootstrap import BootstrapService
@@ -46,6 +47,7 @@ def _cmd_init(arguments: argparse.Namespace) -> dict[str, Any]:
         "library": str(settings.library),
         "database": str(settings.database),
         "schema_version": int(version),
+        "release_version": __version__,
     }
 
 

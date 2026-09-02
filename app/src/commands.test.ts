@@ -60,6 +60,20 @@ describe("desktop command contract", () => {
     expect(args).not.toContain("--allow-risk");
   });
 
+  it("allows the backend to fall back when symlinks are unavailable", () => {
+    const args = projectApplyArgs(
+      "C:\\projects\\demo",
+      ["skill-a"],
+      "create documentation",
+      "agents",
+      false,
+    );
+    expect(args.slice(args.indexOf("--mode"), args.indexOf("--mode") + 2)).toEqual([
+      "--mode",
+      "auto",
+    ]);
+  });
+
   it("adds the risk override only after explicit acceptance", () => {
     expect(projectPlanArgs("/tmp/project", "install tools", "auto", false)).not.toContain("--allow-risk");
     expect(projectPlanArgs("/tmp/project", "install tools", "auto", true)).toContain("--allow-risk");
