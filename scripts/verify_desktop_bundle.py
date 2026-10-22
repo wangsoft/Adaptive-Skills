@@ -92,11 +92,16 @@ def _safe_archive_path(value: str, label: str) -> None:
 def _preflight_7z(seven_zip: str, artifact: Path) -> None:
     result = subprocess.run(
         [seven_zip, "l", "-slt", str(artifact)],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=120,
     )
+    if result.returncode:
+        raise RuntimeError(
+            f"Cannot inspect package {artifact.name} with {seven_zip}:\n"
+            f"{result.stdout}\n{result.stderr}"
+        )
     for line in result.stdout.splitlines():
         key, separator, value = line.partition(" = ")
         if not separator or key not in {"Path", "Symbolic Link", "Hard Link"}:
@@ -291,7 +296,8 @@ def _extract_nsis(artifact: Path, temporary: Path) -> Path:
 
 
 def _extract_appimage(artifact: Path, temporary: Path) -> Path:
-    seven_zip = shutil.which("7z") or shutil.which("7z.exe")
+    # Ubuntu 22.04's p7zip 16.02 cannot decode modern Zstandard AppImages.
+    seven_zip = shutil.which("7zz") or shutil.which("7z")
     if not seven_zip:
         raise RuntimeError("7-Zip is required to verify the Linux AppImage")
     _preflight_7z(seven_zip, artifact)
@@ -551,6 +557,15 @@ def stage_verified_assets(
     )
 
 
+def _release_asset_name(name: str) -> str:
+    # GitHub rewrites spaces/special characters on upload. Normalize before
+    # computing checksums and updater URLs, without changing the signed bytes.
+    normalized = name.replace(" ", "-")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", normalized):
+        raise RuntimeError(f"Unsafe release asset name: {name!r}")
+    return normalized
+
+
 def assemble_release_assets(inputs: Path, output: Path, release_version: str) -> None:
     if output.exists() or output.is_symlink():
         raise RuntimeError(f"Release asset directory already exists: {output}")
@@ -593,8 +608,9 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
             raise RuntimeError(f"Unmanifested files in verified asset directory: {manifest_path.parent}")
         for item in files:
             name = item["name"]
-            if name in names:
-                raise RuntimeError(f"Duplicate release asset name: {name}")
+            release_name = _release_asset_name(name)
+            if release_name in names:
+                raise RuntimeError(f"Duplicate release asset name: {release_name}")
             asset = _require_regular_file(
                 manifest_path.parent / name,
                 manifest_path.parent,
@@ -602,7 +618,7 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
             )
             if _sha256(asset) != item.get("sha256"):
                 raise RuntimeError(f"Verified release asset digest mismatch: {asset}")
-            names.add(name)
+            names.add(release_name)
             verified.append(asset)
         updater_suffix = {
             "darwin": ".app.tar.gz",
@@ -626,7 +642,7 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
         raise RuntimeError(f"Missing verified platform assets: {platforms}")
     output.mkdir(parents=True)
     for asset in verified:
-        shutil.copy2(asset, output / asset.name)
+        shutil.copy2(asset, output / _release_asset_name(asset.name))
     target_names = {
         "darwin": "darwin-aarch64",
         "win32": "windows-x86_64",
@@ -639,7 +655,7 @@ def assemble_release_assets(inputs: Path, output: Path, release_version: str) ->
         "platforms": {
             target_names[platform]: {
                 "signature": _read_signature(signature),
-                "url": base_url + urllib.parse.quote(archive.name),
+                "url": base_url + urllib.parse.quote(_release_asset_name(archive.name)),
             }
             for platform, (archive, signature) in sorted(update_platforms.items())
         },

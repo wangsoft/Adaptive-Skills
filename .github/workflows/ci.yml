@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: "0.1.17"
+  RELEASE_VERSION: "0.1.18"
   PYTHONUTF8: "1"
 
 concurrency:
@@ -95,7 +95,15 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils p7zip-full
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+      - name: Install pinned AppImage verifier
+        if: runner.os == 'Linux'
+        run: |
+          verifier_dir="$(mktemp -d)"
+          curl --fail --location --retry 3 https://github.com/ip7z/7zip/releases/download/26.05/7z2605-linux-x64.tar.xz --output "$verifier_dir/7zip.tar.xz"
+          echo "22cf82fcc6eb7474f1d5bb4f02c0f8ebd573a718089d6833dc30f8350a3b232e  $verifier_dir/7zip.tar.xz" | sha256sum --check -
+          tar -xJf "$verifier_dir/7zip.tar.xz" -C "$verifier_dir" 7zz
+          echo "$verifier_dir" >> "$GITHUB_PATH"
       - name: Install packaging dependencies
         run: python -m pip install -e ".[desktop]"
       - name: Install desktop dependencies

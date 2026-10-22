@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 
-RELEASE_VERSION = "0.1.17"
+RELEASE_VERSION = "0.1.18"
 UPDATER_PUBLIC_KEY = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1RTNBRUI2NDk1N0VCMTAKUldRUTYxZEp0cTdqcFNOSDdvd0xHOXdwaFZuTDNqQzFnWjZBVFpCZnhUdjJQWlh6My9iTE9RMnQK"
 UPDATER_ENDPOINT = "https://github.com/wangsoft/Adaptive-Skills/releases/latest/download/latest.json"
 CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"

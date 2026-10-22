@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,33 @@ from scripts import verify_desktop_bundle as verifier
 
 
 class BundleVerifierTests(unittest.TestCase):
+    def test_appimage_prefers_modern_7zip_and_keeps_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            artifact = root / "test.AppImage"
+            with (
+                patch.object(verifier.shutil, "which", return_value="/tools/7zz"),
+                patch.object(verifier, "_preflight_7z") as preflight,
+                patch.object(verifier.subprocess, "run") as run,
+            ):
+                extracted = verifier._extract_appimage(artifact, root)
+            preflight.assert_called_once_with("/tools/7zz", artifact)
+            self.assertEqual(run.call_args.args[0][0], "/tools/7zz")
+            self.assertEqual(extracted, root / "appimage")
+
+    def test_archive_listing_failure_includes_tool_diagnostic(self) -> None:
+        result = subprocess.CompletedProcess([], 2, "7-Zip 16.02", "E_NOTIMPL")
+        with patch.object(verifier.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "(?s)16.02.*E_NOTIMPL"):
+                verifier._preflight_7z("7z", Path("test.AppImage"))
+
+    def test_archive_preflight_still_rejects_unsafe_paths(self) -> None:
+        for value in ("../outside", "/absolute", "C:\\outside"):
+            result = subprocess.CompletedProcess([], 0, f"Path = {value}\n", "")
+            with patch.object(verifier.subprocess, "run", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "Unsafe"):
+                    verifier._preflight_7z("7zz", Path("test.AppImage"))
+
     def test_discovers_each_supported_platform_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -168,13 +196,13 @@ class BundleVerifierTests(unittest.TestCase):
             self.assertEqual(
                 names,
                 [
-                    "Adaptive Skills.app.tar.gz",
-                    "Adaptive Skills.app.tar.gz.sig",
-                    "Adaptive Skills_0.1.16_aarch64.dmg",
-                    "Adaptive Skills_0.1.16_amd64.AppImage",
-                    "Adaptive Skills_0.1.16_amd64.AppImage.sig",
-                    "Adaptive Skills_0.1.16_x64-setup.exe",
-                    "Adaptive Skills_0.1.16_x64-setup.exe.sig",
+                    "Adaptive-Skills.app.tar.gz",
+                    "Adaptive-Skills.app.tar.gz.sig",
+                    "Adaptive-Skills_0.1.16_aarch64.dmg",
+                    "Adaptive-Skills_0.1.16_amd64.AppImage",
+                    "Adaptive-Skills_0.1.16_amd64.AppImage.sig",
+                    "Adaptive-Skills_0.1.16_x64-setup.exe",
+                    "Adaptive-Skills_0.1.16_x64-setup.exe.sig",
                     "SHA256SUMS",
                     "adaptive-skills_0.1.16_amd64.deb",
                     "latest.json",
@@ -193,9 +221,19 @@ class BundleVerifierTests(unittest.TestCase):
             )
             self.assertTrue(
                 latest["platforms"]["darwin-aarch64"]["url"].endswith(
-                    "Adaptive%20Skills.app.tar.gz"
+                    "Adaptive-Skills.app.tar.gz"
                 )
             )
+
+            for updater, signature in updater_files:
+                self.assertEqual(
+                    (output / verifier._release_asset_name(updater.name)).read_bytes(),
+                    updater.read_bytes(),
+                )
+                self.assertEqual(
+                    (output / verifier._release_asset_name(signature.name)).read_bytes(),
+                    signature.read_bytes(),
+                )
 
             manifest = json.loads(
                 (inputs / "desktop-linux-x64" / "verified-assets.json").read_text(

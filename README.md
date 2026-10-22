@@ -33,7 +33,7 @@ Skill 不应该全部塞进全局上下文。Adaptive Skills 以 `~/skills` 为�
 
 ### 下载与安装
 
-[下载 v0.1.17](https://github.com/wangsoft/Adaptive-Skills/releases/tag/v0.1.17)：macOS Apple Silicon（arm64）选择 DMG，Windows x64 选择安装 EXE，Linux x64 选择 AppImage 或 DEB。Release 附有 `SHA256SUMS`，可校验下载文件。
+[下载 v0.1.18](https://github.com/wangsoft/Adaptive-Skills/releases/tag/v0.1.18)：macOS Apple Silicon（arm64）选择 DMG，Windows x64 选择安装 EXE，Linux x64 选择 AppImage 或 DEB。Release 附有 `SHA256SUMS`，可校验下载文件。
 
 macOS 将应用拖入“应用程序”后打开。构建使用临时签名，**未经过 Apple 公证**；确认下载来源和校验值后，若系统拦截，可执行：
 
@@ -42,7 +42,7 @@ xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
 
-v0.1.17 起支持签名校验的应用内升级：每天至多检查一次，确认后才安装并重启。Linux DEB/RPM 通过系统包管理器更新。**v0.1.16 及更早版本首次升级需手动下载。** Windows 安装包目前未进行代码签名。
+v0.1.18 起支持签名校验的应用内升级：每天至多检查一次，确认后才安装并重启。Linux DEB/RPM 通过系统包管理器更新。**v0.1.16 及更早版本首次升级需手动下载。** Windows 安装包目前未进行代码签名。
 
 ### 本地开发
 
@@ -84,7 +84,7 @@ Skills should not all live in the global context. Adaptive Skills treats `~/skil
 
 ### Download and install
 
-[Download v0.1.17](https://github.com/wangsoft/Adaptive-Skills/releases/tag/v0.1.17): choose the DMG for macOS Apple Silicon (arm64), the installer EXE for Windows x64, or AppImage/DEB for Linux x64. The release includes `SHA256SUMS` for download verification.
+[Download v0.1.18](https://github.com/wangsoft/Adaptive-Skills/releases/tag/v0.1.18): choose the DMG for macOS Apple Silicon (arm64), the installer EXE for Windows x64, or AppImage/DEB for Linux x64. The release includes `SHA256SUMS` for download verification.
 
 On macOS, drag the app into Applications and open it. The build is ad-hoc signed and **not notarized by Apple**. If macOS blocks it, verify the download source and checksum before running:
 
@@ -93,7 +93,7 @@ xattr -dr com.apple.quarantine "/Applications/Adaptive Skills.app"
 open "/Applications/Adaptive Skills.app"
 ```
 
-Starting with v0.1.17, in-app updates verify signatures, check at most daily, and require confirmation before installation and restart. Linux DEB/RPM installs use the system package manager. **Upgrading from v0.1.16 or earlier requires a manual download.** Windows installers are not currently code-signed.
+Starting with v0.1.18, in-app updates verify signatures, check at most daily, and require confirmation before installation and restart. Linux DEB/RPM installs use the system package manager. **Upgrading from v0.1.16 or earlier requires a manual download.** Windows installers are not currently code-signed.
 
 ### Run locally
 

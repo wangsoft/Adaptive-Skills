@@ -1,6 +1,6 @@
 [package]
 name = "adaptive-skills-desktop"
-version = "0.1.17"
+version = "0.1.18"
 description = "Local desktop manager for the Adaptive Skills catalog"
 authors = ["Adaptive Skills contributors"]
 edition = "2021"
