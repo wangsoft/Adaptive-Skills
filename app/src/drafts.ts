@@ -1,3 +1,5 @@
+import { readSourceFailures, type SourceRefreshFailure } from "./sourceRefresh";
+
 export type ProjectTarget = string;
 export type ProjectDiscoveryMode = "requirement" | "category";
 export type DraftLLMProvider = "codex" | "claude" | "openai-compatible";
@@ -47,6 +49,8 @@ export interface SourceRefreshHistoryRecord {
   unchanged: number;
   local: number;
   failed: number;
+  // Absent on older summary-only records; an empty array means no details were returned.
+  failures?: SourceRefreshFailure[];
 }
 
 export const EMPTY_PROJECT_DRAFT: ProjectDraft = {
@@ -271,7 +275,7 @@ export function loadSourceRefreshHistory(
 ): SourceRefreshHistoryRecord[] {
   const value = read(storage, key("source-refresh-history", library));
   if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
+  const history = value.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const record = item as Partial<SourceRefreshHistoryRecord>;
     const counts = [record.total, record.updated, record.unchanged, record.local, record.failed];
@@ -287,20 +291,29 @@ export function loadSourceRefreshHistory(
       unchanged: Number(record.unchanged),
       local: Number(record.local),
       failed: Number(record.failed),
+      failures: readSourceFailures(record.failures ?? (item as { results?: unknown }).results),
     }];
   }).slice(0, 10);
+  // Migrate legacy raw results to the same bounded, redacted allowlist used for new runs.
+  write(storage, key("source-refresh-history", library), history);
+  return history;
 }
 
 export function recordSourceRefresh(
   storage: Storage,
   library: string,
-  result: Pick<SourceRefreshHistoryRecord, "total" | "updated" | "unchanged" | "local" | "failed">,
+  result: Pick<SourceRefreshHistoryRecord, "total" | "updated" | "unchanged" | "local" | "failed"> & { results?: unknown },
   completedAt = new Date().toISOString(),
 ): SourceRefreshHistoryRecord[] {
   const record: SourceRefreshHistoryRecord = {
     id: `${completedAt}-${Math.random().toString(36).slice(2, 10)}`,
     completedAt,
-    ...result,
+    total: result.total,
+    updated: result.updated,
+    unchanged: result.unchanged,
+    local: result.local,
+    failed: result.failed,
+    failures: readSourceFailures(result.results),
   };
   const history = [record, ...loadSourceRefreshHistory(storage, library)].slice(0, 10);
   write(storage, key("source-refresh-history", library), history);

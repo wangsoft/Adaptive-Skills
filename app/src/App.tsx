@@ -33,6 +33,8 @@ import { api } from "./api";
 import appIconUrl from "./assets/app-icon.svg";
 import { Localized, translate, useLanguage } from "./i18n";
 import UpdateCenter from "./UpdateCenter";
+import SourceRefreshHistory from "./SourceRefreshHistory";
+import { sanitizeSourceError } from "./sourceRefresh";
 import {
   AgentTargetRegistryPanel,
   ProjectActivationMatrix,
@@ -70,7 +72,7 @@ import {
   saveSkillFilterDraft,
   saveSourceDraft,
 } from "./drafts";
-import type { ProjectDraft } from "./drafts";
+import type { ProjectDraft, SourceRefreshHistoryRecord } from "./drafts";
 import type {
   AppSnapshot,
   ProjectEntryStatus,
@@ -238,6 +240,10 @@ function App() {
     () => localStorage.getItem("adaptive-skills-library") || DEFAULT_LIBRARY,
   );
   const [view, setView] = useState<View>(loadLastView);
+  const [sourceHistory, setSourceHistory] = useState(() => ({ library, records: loadSourceRefreshHistory(localStorage, library) }));
+  useEffect(() => {
+    setSourceHistory({ library, records: loadSourceRefreshHistory(localStorage, library) });
+  }, [library]);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -354,11 +360,29 @@ function App() {
     setError(null);
     try {
       const result = await api.refreshAllSources(library);
+      // Persist at the operation owner: SourcesView may be unmounted during the update.
+      setSourceHistory({ library, records: recordSourceRefresh(localStorage, library, result) });
       await loadSnapshot();
       return result;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       return null;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retrySourceUpdate = async (id: string): Promise<void> => {
+    setBusy(`update-${id}`);
+    setError(null);
+    try {
+      await api.updateSource(library, id);
+      await api.scan(library, id);
+      await loadSnapshot();
+    } catch (reason) {
+      const message = sanitizeSourceError(reason instanceof Error ? reason.message : String(reason));
+      setError(message);
+      throw new Error(message);
     } finally {
       setBusy(null);
     }
@@ -618,6 +642,8 @@ function App() {
                 onScan={(id) => runAction(`scan-${id}`, () => api.scan(library, id))}
                 onReconcile={reconcileLocalSources}
                 onRefreshAll={refreshAllSources}
+                refreshHistory={sourceHistory.library === library ? sourceHistory.records : []}
+                onRetryUpdate={retrySourceUpdate}
                 onSetPolicy={(id, policy) =>
                   runAction(`policy-${id}`, () => api.setSourcePolicy(library, id, policy))
                 }
@@ -1086,7 +1112,7 @@ function FilterSelect({ label, value, onChange, options }: { label: string; valu
   return <Localized><label className="select-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label></Localized>;
 }
 
-function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, onSetPolicy, onPreviewRemove, onRemove, onRestore, onPreviewForget, onForget, llmEnabled, onEvaluate }: {
+function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, onReconcile, onUpdate, onRefreshAll, refreshHistory, onRetryUpdate, onSetPolicy, onPreviewRemove, onRemove, onRestore, onPreviewForget, onForget, llmEnabled, onEvaluate }: {
   library: string;
   sources: SourceSummary[];
   removedSources: SourceSummary[];
@@ -1096,6 +1122,8 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
   onReconcile: () => Promise<SourceReconcileResult | null>;
   onUpdate: (id: string) => Promise<boolean>;
   onRefreshAll: () => Promise<SourceRefreshAllResult | null>;
+  refreshHistory: SourceRefreshHistoryRecord[];
+  onRetryUpdate: (id: string) => Promise<void>;
   onSetPolicy: (id: string, policy: SourceUpdatePolicy) => Promise<boolean>;
   onPreviewRemove: (id: string) => Promise<SourceRemovalPreview | null>;
   onRemove: (preview: SourceRemovalPreview, cleanupReferences: boolean) => Promise<SourceRemovalResult | null>;
@@ -1121,7 +1149,6 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
   const [forgetResult, setForgetResult] = useState<SourceForgetResult | null>(null);
   const removalDialogRef = useRef<HTMLDivElement>(null);
   const forgetDialogRef = useRef<HTMLDivElement>(null);
-  const [refreshHistory, setRefreshHistory] = useState(() => loadSourceRefreshHistory(localStorage, library));
   useEffect(() => {
     saveSourceDraft(localStorage, library, { adding, url, name });
   }, [library, adding, url, name]);
@@ -1142,7 +1169,6 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
     const result = await onRefreshAll();
     if (result) {
       setRefreshResult(result);
-      setRefreshHistory(recordSourceRefresh(localStorage, library, result));
     }
   };
   const reconcile = async () => {
@@ -1151,7 +1177,6 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
     const result = await onReconcile();
     if (result) setReconcileResult(result);
   };
-  const refreshFailures = refreshResult?.results.filter((item) => item.status === "failed") ?? [];
   const evaluateSource = (source: SourceSummary) => {
     if (!source.pending_evaluation_count || !llmEnabled) return;
     const confirmed = window.confirm(translate(
@@ -1253,15 +1278,11 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
           <div className="refresh-summary-heading">
             {refreshResult.failed ? <AlertTriangle size={18} /> : <Check size={18} />}
             <div>
-              <strong>全部来源更新完成</strong>
+              <strong>{refreshResult.failed ? "更新结束，部分来源失败" : "全部来源更新完成"}</strong>
               <p>已检查 {refreshResult.total} 个来源 · {refreshResult.updated} 个已更新 · {refreshResult.unchanged} 个无变化 · {refreshResult.local} 个本地保留 · {refreshResult.failed} 个失败</p>
+              {refreshResult.failed > 0 && <p>请在下方更新记录中查看失败原因和处理建议。</p>}
             </div>
           </div>
-          {refreshFailures.length > 0 && (
-            <div className="refresh-failures">
-              {refreshFailures.map((item) => <p key={item.source_id}><strong>{item.source}</strong><span>{item.error || "更新失败"}{item.type === "ConflictError" ? "；可保留改动并设为本地维护" : ""}</span></p>)}
-            </div>
-          )}
         </div>
       )}
       {evaluationResult && <EvaluationRunSummary run={evaluationResult} />}
@@ -1285,13 +1306,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
             : translate(`原仓库目录已不存在：${forgetResult.repository_path}`, `Original repository directory no longer exists: ${forgetResult.repository_path}`)}</span></div>
         </div>
       )}
-      {refreshHistory.length > 0 && (
-        <section className="panel source-refresh-history">
-          <div className="panel-heading"><div><span className="eyebrow">Local activity</span><h3>最近全部更新记录</h3></div><span className="badge neutral">保留 {refreshHistory.length} 次</span></div>
-          <div className="source-refresh-history-list">{refreshHistory.map((record) => <div className="source-refresh-history-row" key={record.id}><History size={14} /><time>{formatDate(record.completedAt)}</time><span>{record.updated} 更新</span><span>{record.unchanged} 无变化</span><span>{record.local} 本地保留</span><span className={record.failed ? "failed" : "success"}>{record.failed} 失败</span></div>)}</div>
-          <p>这里只保存计数摘要，不保存仓库错误文本或凭据；完整状态仍以本地目录和 SQLite 目录为准。</p>
-        </section>
-      )}
+      <SourceRefreshHistory records={refreshHistory} sources={sources} busy={busy} onRetry={onRetryUpdate} />
       {adding && (
         <form className="panel add-source" onSubmit={(event) => void submit(event)}>
           <div><span className="eyebrow">Clone, scan and queue</span><h3>添加远程 Skill 仓库</h3></div>
@@ -1302,7 +1317,7 @@ function SourcesView({ library, sources, removedSources, busy, onAdd, onScan, on
       )}
       <section className="source-grid">
         {sources.map((source) => (
-          <article className="source-card" key={source.id}>
+          <article className="source-card" key={source.id} id={`source-${source.id}`} tabIndex={-1}>
             <div className="source-card-heading"><div className="source-avatar large">{source.name.slice(0, 2).toUpperCase()}</div><div><h3>{source.name}</h3><p>{source.url || "本地归集目录"}</p></div><div className="source-badges"><span className="badge neutral">{source.url ? (source.update_policy === "local" ? "本地维护" : "远程跟随") : "本地归集"}</span><span className={source.repository_exists === false || source.invalid_count ? "badge warning" : "badge success"}>{source.repository_exists === false ? "目录缺失" : source.invalid_count ? "需检查" : "健康"}</span></div></div>
             <div className="source-stat-row"><div><span>Skills</span><strong>{source.skill_count}</strong></div><div><span>有效</span><strong>{source.valid_count}</strong></div><div><span>待评测</span><strong>{source.pending_evaluation_count}</strong></div></div>
             <div className="source-path" title={source.local_path}><FolderGit2 size={14} />{source.local_path}</div>

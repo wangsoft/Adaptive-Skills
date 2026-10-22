@@ -512,6 +512,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_cli_discovery_finds_latest_nvm_install_without_shell_path(self) -> None:
         home = Path(self.temporary.name) / "home"
+        is_executable = CLIProviderRunner._is_executable
         older = home / ".nvm/versions/node/v20.1.0/bin/codex"
         latest = home / ".nvm/versions/node/v24.11.1/bin/codex"
         for executable in (older, latest):
@@ -522,6 +523,12 @@ class EvaluationTests(unittest.TestCase):
         with (
             patch("adaptive_skills.evaluation.Path.home", return_value=home),
             patch("adaptive_skills.evaluation.shutil.which", return_value=None),
+            patch.dict(os.environ, {"ADAPTIVE_SKILLS_CODEX_EXECUTABLE": ""}),
+            patch.object(
+                CLIProviderRunner,
+                "_is_executable",
+                side_effect=lambda path: path.is_relative_to(home) and is_executable(path),
+            ),
         ):
             self.assertEqual(
                 CLIProviderRunner.resolve_executable("codex"), str(latest)

@@ -117,7 +117,7 @@ describe("navigation-safe form drafts", () => {
     expect(hasLLMProfileDraft(loadLLMProfileDraft(storage, "/library"))).toBe(false);
   });
 
-  it("keeps a bounded, summary-only source refresh history", () => {
+  it("keeps a bounded source refresh history", () => {
     const storage = new MemoryStorage();
     for (let index = 0; index < 12; index += 1) {
       recordSourceRefresh(storage, "/library", {
@@ -132,5 +132,51 @@ describe("navigation-safe form drafts", () => {
     expect(history).toHaveLength(10);
     expect(history[0].updated).toBe(11);
     expect(storage.getItem("adaptive-skills:source-refresh-history-draft:/library")).not.toContain("error");
+  });
+
+  it("preserves failure details after reopening and after another update", () => {
+    const storage = new MemoryStorage();
+    const result = {
+      total: 1, updated: 0, unchanged: 0, local: 0, failed: 1,
+      results: [{ source_id: "repo-1", source: "demo", status: "failed" as const,
+        before_sha: null, type: "ValidationError", error: "Could not resolve host: github.com" }],
+    };
+    recordSourceRefresh(storage, "/library", result);
+    expect(loadSourceRefreshHistory(storage, "/library")[0]).toMatchObject({
+      failures: [{ source_id: "repo-1", source: "demo", error: "Could not resolve host: github.com" }],
+    });
+    recordSourceRefresh(storage, "/library", { total: 1, updated: 0, unchanged: 1, local: 0, failed: 0 });
+    expect(loadSourceRefreshHistory(storage, "/library")[1]).toMatchObject({
+      failures: [{ source_id: "repo-1" }],
+    });
+    expect(loadSourceRefreshHistory(storage, "/other-library")).toEqual([]);
+  });
+
+  it("recovers legacy raw details and rewrites them without raw credentials", () => {
+    const storage = new MemoryStorage();
+    const key = "adaptive-skills:source-refresh-history-draft:/library";
+    storage.setItem(key, JSON.stringify([
+      { id: "raw", completedAt: "2026-10-18T03:04:00Z", total: 1, updated: 0, unchanged: 0, local: 0, failed: 1,
+        results: [{ source_id: "demo", source: "demo", status: "failed", error: "fatal: https://user:private-pass@example.test/repo", secret: "private-extra" }] },
+      { id: "summary", completedAt: "2026-09-06T15:35:00Z", total: 1, updated: 0, unchanged: 0, local: 0, failed: 1 },
+      { id: "broken", failed: -1 },
+    ]));
+    const records = loadSourceRefreshHistory(storage, "/library");
+    expect(records).toHaveLength(2);
+    expect(records[0].failures?.[0].error).toBe("fatal: https://[redacted]@example.test/repo");
+    expect(records[1].failures).toBeUndefined();
+    expect(storage.getItem(key)).not.toContain("private");
+    expect(storage.getItem(key)).not.toContain('"results"');
+  });
+
+  it("redacts new history before storage and never persists unrelated result fields", () => {
+    const storage = new MemoryStorage();
+    const result = { total: 1, updated: 0, unchanged: 0, local: 0, failed: 1,
+      credential: "private-extra",
+      results: [{ source_id: "demo", source: "demo", status: "failed", error: "https://user:private-pass@example.test/repo" }],
+    };
+    recordSourceRefresh(storage, "/library", result);
+    expect(storage.getItem("adaptive-skills:source-refresh-history-draft:/library")).not.toContain("private");
+    expect(loadSourceRefreshHistory(storage, "/library")[0].failures).toHaveLength(1);
   });
 });
